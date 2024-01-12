@@ -4,6 +4,7 @@ import json
 from eth_abi import decode
 from enum import Enum
 import hashlib
+from Crypto.Hash import keccak
 
 
 TRANSACTION_TO_PROVE = "0x849c9f33ecd4fddc6f11a270180e39d99386a6074c23fdfcb7cd6ad9034aa47e"
@@ -29,7 +30,12 @@ def get_storage_proof(account, key, batch):
 def verify_storage_proof(account, key, proof, value, index, roothash, debug=False):
     if debug:
         print(f"Proof len: {len(proof)}")
+    if len(bytes.fromhex(account[2:]) ) != 20:
+        print(f"Wrong account length {bytes.fromhex(account[2:]) } expected 20")
+        raise Exception
+    
     tree_key = bytes(12) + bytes.fromhex(account[2:]) + bytes.fromhex(key[2:])
+
     if len(tree_key) != 64:
         print(f"Wrong length {len(tree_key)} expected 64")
         raise Exception
@@ -82,14 +88,12 @@ def verify_storage_proof(account, key, proof, value, index, roothash, debug=Fals
     if debug:
         print(f"Root hash is: {current_hash.hex()} - matching.")    
     
-
-if True:
-    #data = get_storage_proof("0x7F0d15C7FAae65896648C8273B6d7E43f58Fa842", "0x56e81f171bcc55a6ff8345e692c0f86e5b48e01b996cadc001622fb5e363b422", 354895)
-    address = "0x000000000000000000000000000000000000800B"
-    key = "0x0000000000000000000000000000000000000000000000000000000000000007"
-    #key = "0x0000000000000000000000009fd660FDc82A13f2944A79d6A3F0218851c98De9"
-    storage_proof = get_storage_proof(address, key, 354895)
-
-    print(storage_proof)
     
-    verify_storage_proof(address, key, storage_proof["proof"], storage_proof["value"], storage_proof["index"], "0xe5aaf538de0b0261e33190681aa8515fdec298bda95e6457fc30e6bf0460eb59")
+    
+
+
+    
+    #verify_storage_proof(address, key, storage_proof["proof"], storage_proof["value"], storage_proof["index"], "0xe5aaf538de0b0261e33190681aa8515fdec298bda95e6457fc30e6bf0460eb59")
+
+#00000000000000000000000033a3ffd50c5805ef071380bdebe76aea8dfe24af0000000000000000000000000000000000000000000000000000000000000008
+#00000000000000000000000000000000000000000000000000000000000000af0000000000000000000000000000000000000000000000000000000000000008

@@ -8,16 +8,28 @@ import requests
 import json
 from eth_abi import decode
 from enum import Enum
+from pubdata  import parse_pubdata
+from Crypto.Hash import keccak
+from merkle_proof import get_storage_proof, verify_storage_proof
+
 
 TRANSACTION_TO_PROVE = "0x849c9f33ecd4fddc6f11a270180e39d99386a6074c23fdfcb7cd6ad9034aa47e"
 ZKSYNC_URL = 'https://mainnet.era.zksync.io'
 ETH_URL = 'https://rpc.ankr.com/eth'
 
 
+WHITELISTED_ADDRESSES = set(
+    [
+        "0x32400084c286cf3e17e7b677ea9583e60a000324", # zksync era mainnet diamond proxy
+        "0xa0425d71cB1D6fb80E65a5361a04096E0672De03", # zksync era timelock
+    ]
+)
+
 
 # Checks that tx belongs to a block.
-# Returns batch, block and block hash.
-# does NOT 
+# Retuns the block number and block hash and (unverified batch number).
+# After calling this - you should verify that this block and 
+# hash was correctly included in the chain.
 def verify_tx_inclusion_in_block(txn):    
     web3 = Web3(Web3.HTTPProvider(ZKSYNC_URL))
     # Check if connected successfully
@@ -70,11 +82,11 @@ def verify_tx_inclusion_in_block(txn):
     
     print(f"\033[92m[OK]\033[0m Block hash is valid")
     
-    return tx['blockNumber'], block['hash'].hex()
+    return tx['blockNumber'], block['hash'].hex(), int(block['l1BatchNumber'], 16)
 
 
 
-def verify_block_inclusion_in_batch(block_number, block_hash):
+def get_batch_root_hash(l1_batch):
     web3 = Web3(Web3.HTTPProvider(ZKSYNC_URL))
     # Check if connected successfully
     if not web3.is_connected():
@@ -88,29 +100,17 @@ def verify_block_inclusion_in_batch(block_number, block_hash):
         return
     
     print(f"\033[92m[OK]\033[0m Connected to {ZKSYNC_URL} and {ETH_URL}")
-    # now fetch the blockinfo
-    try:
-        block = web3.eth.get_block(block_number)
-    except Exception as e:
-        print(f"An error occurred: {e}")
-        return
     
-    if block['hash'].hex() != block_hash:
-        print(f"\033[91m[FAIL] Block hash doesn't match \033[0m")
-        raise Exception
-    
-    l1_batch = int(block['l1BatchNumber'],16)
-    print(f"\033[92m[OK]\033[0m Checking if block {block_number} belongs to batch {l1_batch}")
-
-
     l1_address = get_l1_address()
-    print(f"\033[93m[WARNING] - Assuming L1 address of the contract is {l1_address} - please verify manually - https://etherscan.io/address/{l1_address} \033[0m")
+    if l1_address not in WHITELISTED_ADDRESSES:
+        print(f"\033[93m[WARNING] - Assuming L1 address of the contract is {l1_address} - please verify manually - https://etherscan.io/address/{l1_address} \033[0m")
 
 
     commitTx, proveTx, executeTx = get_commit_and_prove_and_verify(l1_batch)
     if commitTx is None:
         print(f"\033[91m[FAIL] Batch {l1_batch} is not commited yet - please try later. \033[0m")
         raise Exception
+    
     
     # check that commitTx is of the right type.
         # Fetch the transaction
@@ -120,22 +120,63 @@ def verify_block_inclusion_in_batch(block_number, block_hash):
         print(f"An error occurred: {e}")
         return
     
-    #print(tx)
-    # TODO: 
-    # - check that it touched the right address
-    # - check the ABI
-    # - check that it was successful.
-
-    calldata = tx['input']
-
-    print(calldata)
+    try:
+        receipt = ethweb3.eth.get_transaction_receipt(commitTx)
+    except Exception as e:
+        print(f"An error occurred: {e}")
+        return
     
+    if receipt.status != 1:
+        print(f"\033[91m[FAIL] L1 commit tx {commitTx} is not successful. \033[0m")
+        raise Exception
+    
+    if receipt.to != l1_address:
+        # It should be a 'fail' - but currently we are sending the transactions to validator lock and NOT to the proxy.
+        if receipt.to not in WHITELISTED_ADDRESSES:
+            print(f"\033[93m[WARNING] - L1 commit tx {commitTx} is being sent to a different address: - please verify manually - https://etherscan.io/address/{receipt.to} \033[0m")
 
+    (new_state_root, _) = parse_commitcall_calldata(tx['input'], l1_batch)
+
+    if proveTx is None:
+        print(f"\033[95m[WARN] Batch {l1_batch} is not proven yet. Make sure to re-run the tool later. \033[0m")
+        is_proven = False
+    else:
+
+        try:
+            prove_tx = ethweb3.eth.get_transaction(proveTx)
+        except Exception as e:
+            print(f"An error occurred: {e}")
+            return
+    
+        try:
+            prove_receipt = ethweb3.eth.get_transaction_receipt(proveTx)
+        except Exception as e:
+            print(f"An error occurred: {e}")
+            return
+        
+        if prove_receipt.to != receipt.to:
+            print(f"\033[91m[FAIL] L1 commit tx was sent to different address than prove ts {receipt.to} vs {prove_receipt.to}. \033[0m")
+            raise Exception    
+        
+        if prove_receipt.status != 1:
+            print(f"\033[91m[FAIL] L1 prove tx {proveTx} is not successful. \033[0m")
+            raise Exception
+        
+        
+    
+    
+        batch_hash = parse_provecall_calldata(prove_tx['input'], l1_batch)
+        if batch_hash != new_state_root:
+            print(f"\033[91m[FAIL] Prove hash {batch_hash} doesn't match commit hash {new_state_root}. \033[0m")
+            raise Exception
+        
+        is_proven = True
 
 
     
-    
+    return is_proven, new_state_root
 
+    
     
 
 def get_l1_address():
@@ -165,152 +206,25 @@ def calculate_block_hash(block_number, block_timestamp, prev_block_hash, transac
     return Web3.solidity_keccak(['uint256', 'uint256', 'bytes32', 'bytes32'], [block_number, block_timestamp, prev_block_hash, transaction_rolling_hash])
 
 
-PackingType = Enum('PackingType', ['Add', 'Subtract', 'Replace'])
-
-def unpack_value(data, index):
-    packing_type = int.from_bytes(data[index: index+1], 'big')
-    index += 1
-    packing_length = packing_type >> 3
-    # last 3 bits
-    packing_type  = packing_type & 0x7
-    result_type = PackingType.Replace
-    if packing_type == 0:
-        result_type = PackingType.Replace
-        # In this case, the key is the full length
-        packing_length = 32
-    if packing_type == 1:
-        result_type = PackingType.Add
-    if packing_type == 2:
-        result_type = PackingType.Subtract
-    if packing_type == 3:
-        result_type = PackingType.Replace
-
-
-    val = data[index: index + packing_length]
-    return index, result_type, val
-
-    
-
-
-# Returns a map with initial writes (key -> (type, value)) and repeated write (index -> (type, value)).
-
-def parse_state_diff(state_diff, debug=False):
-    index = 0
-
-    version = int.from_bytes(state_diff[0:1], 'big')
-    index += 1
-    if debug:
-        print(f"State diff version: {version}")
-    total_logs_len = int.from_bytes(state_diff[index: index+3], 'big')
-    index += 3
-    if debug:
-        print(f"State diff total logs len: {total_logs_len}")
-    derived_key_size = int.from_bytes(state_diff[index: index+1], 'big')
-    index +=1
-    if debug:
-        print(f"Derived key size: {derived_key_size}")
-
-    ## initial writes
-    initial_writes_count = int.from_bytes(state_diff[index: index+2], 'big')
-    index +=2
-    if debug:
-        print(f"Initial writes count {initial_writes_count}")
-    initial_writes = {}
-    repeated_writes = {}
-    for i in range(initial_writes_count):
-        key = state_diff[index: index + 32]
-        index += 32
-
-        (index, result_type, value) =  unpack_value(state_diff, index)
-        if debug:
-            print(f"key : 0x..{key.hex()[-10:]} value: 0x..{value.hex()[-10:]}, type: {result_type}")
-        initial_writes[key] = (result_type, value)
-
-    if debug:
-        print("Repeated writes")
-    repeated_writes_count = 0
-
-    while index < len(state_diff):
-        key = state_diff[index: index + derived_key_size]
-        index += derived_key_size
-        (index, result_type, value) =  unpack_value(state_diff, index)
-        if debug:
-            print(f"key : 0x..{key.hex()[-10:]} value: 0x..{value.hex()[-10:]}, type: {result_type}")
-        repeated_writes_count += 1
-        repeated_writes[key] = (result_type, value)
-
-
-    if debug:
-        print(f"Repeated writes count: {repeated_writes_count}")
-    return (initial_writes, repeated_writes)
-
-
-    
 
 
 
 
 
-
-
-
-def parse_pubdata(pubdata):
-    print(len(pubdata))
-    # pubdata starts with number of l1 - l2 transactions.
-    index = 0
-    l1_l2_msg_counter = int.from_bytes(pubdata[0:4], 'big')
-    index += 4
-    print(l1_l2_msg_counter)
-    SIZE_OF_L1_L2_MSG = 88
-    index += l1_l2_msg_counter * SIZE_OF_L1_L2_MSG
-    large_msg_counter = int.from_bytes(pubdata[index: index+4], 'big')
-    index += 4 
-    print(f"large msg: {large_msg_counter}")
-    for _ in range(large_msg_counter):
-        msg_size = int.from_bytes(pubdata[index: index+4], 'big')
-        print(f"msg size: {msg_size}")
-        index += 4 + msg_size 
-    bytecodes_size = int.from_bytes(pubdata[index: index+4], 'big')
-    index += 4 
-    print(f"bytecodes: {bytecodes_size}")
-    for _ in range(bytecodes_size):
-        msg_size = int.from_bytes(pubdata[index: index+4], 'big')
-        print(f"bytecode size: {msg_size}")
-        index += 4 + msg_size 
-
-    state_diff = pubdata[index:]
-    print(f"State diff size: {len(state_diff)}")
-    parse_state_diff(state_diff)
-
-
-
-
-
-
-
-
-
-
-COMMIT_BATCHES_SELECTOR = "701f58c5"
-
+COMMIT_BATCHES_SELECTOR = "0x701f58c5"
 #    function commitBatches(
 #        StoredBatchInfo calldata _lastCommittedBatchData,
 #        CommitBatchInfo[] calldata _newBatchesData
 #    )
 
-def parse_calldata(calldata):
-
-    batch_to_find = 389674
-    tx = "0x1234"
-
-
+def parse_commitcall_calldata(calldata, batch_to_find):
     selector = calldata[0:4]
 
     if selector.hex() != COMMIT_BATCHES_SELECTOR:
-        print(f"\033[91m[FAIL] Invalid selector {selector.hex()} - expected {COMMIT_BATCHES_SELECTOR} in transation {tx}. \033[0m")
+        print(f"\033[91m[FAIL] Invalid selector {selector.hex()} - expected {COMMIT_BATCHES_SELECTOR}. \033[0m")
         raise Exception
     
-    (last_commited_batch_data, new_batches_data) = decode(["(uint64,bytes32,uint64,uint256,bytes32,bytes32,uint256,bytes32)", "(uint64,uint64,uint64,bytes32,uint256,bytes32,bytes32,bytes32,bytes,bytes)[]"], calldata[4:])
+    (last_commited_batch_data_, new_batches_data) = decode(["(uint64,bytes32,uint64,uint256,bytes32,bytes32,uint256,bytes32)", "(uint64,uint64,uint64,bytes32,uint256,bytes32,bytes32,bytes32,bytes,bytes)[]"], calldata[4:])
 
     # We might be commiting multiple batches in one call - find the one that we're looking for
     selected_batch = None
@@ -319,41 +233,94 @@ def parse_calldata(calldata):
             selected_batch = batch
     
     if not selected_batch:
-        print(f"\033[91m[FAIL] Could not find batch {batch_to_find} in calldata for transaction {tx}. \033[0m")
+        print(f"\033[91m[FAIL] Could not find batch {batch_to_find} in calldata.. \033[0m")
         raise Exception
     
     (batch_number_, timestamp_, index_repeated_storage_changes_, new_state_root_, num_l1_tx_, priority_op_hash_, bootloader_initial_heap_, events_queue_state_, system_logs_, total_pubdata_) = selected_batch
 
     # Now we have to unpack the latest block hash.
+    pubdata_info = parse_pubdata(total_pubdata_)
+    return (new_state_root_, pubdata_info)
+
+
+
+PROVE_BATCHES_SELECTOR = "0x7f61885c"
+
+#    function proveBatches(
+#        StoredBatchInfo calldata _prevBatch,
+#        StoredBatchInfo[] calldata _committedBatches,
+#        ProofInput calldata _proof
+#    ) external;
+
+def parse_provecall_calldata(calldata, batch_to_find):
+    selector = calldata[0:4]
+
+    if selector.hex() != PROVE_BATCHES_SELECTOR:
+        print(f"\033[91m[FAIL] Invalid selector {selector.hex()} - expected {PROVE_BATCHES_SELECTOR}. \033[0m")
+        raise Exception
     
-    parse_pubdata(total_pubdata_)
+    (prev_batch, commited_batches, proofs) = decode(["(uint64,bytes32,uint64,uint256,bytes32,bytes32,uint256,bytes32)", "(uint64,bytes32,uint64,uint256,bytes32,bytes32,uint256,bytes32)[]", "(uint256[],uint256[])"], calldata[4:])
 
-
-    #print(batch_number_)
+    # We might be commiting multiple batches in one call - find the one that we're looking for
+    selected_batch = None
+    for batch in commited_batches:
+        if batch[0] == batch_to_find:
+            selected_batch = batch
     
-    #struct CommitBatchInfo {
-    #    uint64 batchNumber;
-    #    uint64 timestamp;
-    #    uint64 indexRepeatedStorageChanges;
-    #    bytes32 newStateRoot;
-    #    uint256 numberOfLayer1Txs;
-    #    bytes32 priorityOperationsHash;
-    #    bytes32 bootloaderHeapInitialContentsHash;
-    #    bytes32 eventsQueueStateHash;
-    #    bytes systemLogs;
-    #    bytes totalL2ToL1Pubdata;
-    #}
-
-
+    if not selected_batch:
+        print(f"\033[91m[FAIL] Could not find batch {batch_to_find} in calldata.. \033[0m")
+        raise Exception
     
+    (batch_number_, batch_hash_, index_repeated_storage_changes_,  num_l1_tx_, priority_op_hash_, logs2_tree_root, timestamp_, commitment) = selected_batch
+
+    return batch_hash_
 
 
-    #print(last_commited_batch_data)
+
+def get_key_for_batch(batch_number):
+    k = keccak.new(digest_bits=256)
+    MAPPING_BATCH_POSITION_IN_SYSTEM_CONTEXT = 8
+    key = format(batch_number, "064x") + format(MAPPING_BATCH_POSITION_IN_SYSTEM_CONTEXT, "064x")
+    k.update(bytes.fromhex(key))
+    return k.hexdigest()
+
+
+def get_key_for_recent_block(block_number):
+    MAPPING_RECENT_BLOCK_POSITION_IN_SYSTEM_CONTRACT = 11
+    return format(block_number % 257 + MAPPING_RECENT_BLOCK_POSITION_IN_SYSTEM_CONTRACT, "064x")
+
+
+SYSTEM_CONTEXT_ADDRESS = "0x000000000000000000000000000000000000800B"
+
+def prove_tx_inclusion_in_chain(tx):
+    (block_number, block_hash, batch) = verify_tx_inclusion_in_block(tx)
+    # shortcut method - works only if there are less that 256 blocks in a batch.
+    # in future - replace with something more stable, that looks at the chain of blocks.
+
+    storage_proof = get_storage_proof(SYSTEM_CONTEXT_ADDRESS, get_key_for_recent_block(block_number), batch)
+    # check that the values match.
+    if storage_proof['value'] != block_hash:
+        # this might happen if the batch has more than 256 blocks. (then we'll need to add more code)
+        print(f"\033[91m[FAIL] Block hash doesn't match entry in storage (block hash: {block_hash}) storage {storage_proof['value']}  \033[0m")
+        raise Exception
     
+    is_proven, roothash = get_batch_root_hash(batch)
+    
+    print(f"\033[92m[OK]\033[0m Roothash is {roothash.hex()}. Is proven: {is_proven}")
 
-
+    verify_storage_proof(SYSTEM_CONTEXT_ADDRESS, "0x" + get_key_for_recent_block(block_number), storage_proof['proof'], storage_proof['value'], storage_proof['index'],
+                         "0x" + roothash.hex())
+    
+    if is_proven:
+        print(f"\033[92m[OK]\033[0m Roothash is VALID and verified & proven on on L1.")
+    else:
+        print(f"\033[92m[OK]\033[0m Roothash is VALID and verified on L1. (but please wait for proof)")
         
 
+#prove_tx_inclusion_in_chain('0x71dab3ace8c2f2f2810ec58d136e7efed145a87d6b3e6fbdc3db7222f2b50f54')
+#prove_tx_inclusion_in_chain('0x23948b6dac5703849490ba5336e1ef682485a0c82614ee26aff449def6093717')
+
+prove_tx_inclusion_in_chain('0xb07cf51bb1fb788e9ab4961af203ce1057cf40f2781007ff06e7c66b6fc814be')
 
 
 #results = verify_tx_inclusion_in_block(TRANSACTION_TO_PROVE)
@@ -362,28 +329,15 @@ def parse_calldata(calldata):
 
 #verify_block_inclusion_in_batch(23683393, '0xc3a179e5a230e7fe7f97491f8f3b6d22a196152afa2fd0aae542e2d733c003be')
 
-
-with open("tx_prover/testdata/calldata.json") as f:
-    data = json.load(f)
-    calldata = bytes.fromhex(data["calldata"][2:])
-
-print(calldata[3])
-
-print(calldata[0:4].hex())
-
-parse_calldata(calldata)
-
-#compare_block_hashes(23683391)
-
-#compare_block_hashes(23683392)
-
-#compare_block_hashes(23683393)
+#with open("tx_prover/testdata/prove_calldata.json") as f:
+#    data = json.load(f)
+#    calldata = bytes.fromhex(data["calldata"][2:])
+#    parse_provecall_calldata(calldata, 392626)
 
 
-# Example usage
-#web3_url = 'https://mainnet.era.zksync.io'  # Replace with your Ethereum node URL
-#block_number = 1234567  # Replace with the block number you're interested in
 
-#transaction_hashes = get_transaction_hashes(web3_url, block_number)
-#if transaction_hashes is not None:
-#    print("Transaction Hashes in Block:", transaction_hashes)
+
+#with open("tx_prover/testdata/calldata.json") as f:
+#    data = json.load(f)
+#    calldata = bytes.fromhex(data["calldata"][2:])
+
