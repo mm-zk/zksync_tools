@@ -35,7 +35,7 @@ def verify_tx_inclusion_in_block(txn):
     # Check if connected successfully
     if not web3.is_connected():
         print("Failed to connect to zkSync node.")
-        return
+        raise 
     
     print(f"\033[92m[OK]\033[0m Connected to {ZKSYNC_URL}")
 
@@ -44,7 +44,7 @@ def verify_tx_inclusion_in_block(txn):
         tx = web3.eth.get_transaction(txn)
     except Exception as e:
         print(f"An error occurred: {e}")
-        return
+        raise 
     
     print(f"\033[92m[OK]\033[0m Transaction {txn} found. Checking block {tx['blockNumber']}")
     
@@ -54,7 +54,7 @@ def verify_tx_inclusion_in_block(txn):
         block = web3.eth.get_block(tx['blockNumber'])
     except Exception as e:
         print(f"An error occurred: {e}")
-        return
+        raise
     
     print(f"\033[92m[OK]\033[0m Block found with hash {block['hash'].hex()}.")
     
@@ -78,7 +78,7 @@ def verify_tx_inclusion_in_block(txn):
     calculated_block_hash  = calculate_block_hash(tx['blockNumber'], block['timestamp'], block['parentHash'], tx_rolling_hash)
     if calculated_block_hash.hex() != block['hash'].hex():
         print(f"\033[91m[FAIL] Block hash doesn't match for {block['number']} \033[0m")
-        raise Exception
+        raise 
     
     print(f"\033[92m[OK]\033[0m Block hash is valid")
     
@@ -91,13 +91,13 @@ def get_batch_root_hash(l1_batch):
     # Check if connected successfully
     if not web3.is_connected():
         print("Failed to connect to zkSync node.")
-        return
+        raise
     
     ethweb3 = Web3(Web3.HTTPProvider(ETH_URL))
     # Check if connected successfully
     if not ethweb3.is_connected():
         print("Failed to connect to zkSync node.")
-        return
+        raise
     
     print(f"\033[92m[OK]\033[0m Connected to {ZKSYNC_URL} and {ETH_URL}")
     
@@ -109,7 +109,7 @@ def get_batch_root_hash(l1_batch):
     commitTx, proveTx, executeTx = get_commit_and_prove_and_verify(l1_batch)
     if commitTx is None:
         print(f"\033[91m[FAIL] Batch {l1_batch} is not commited yet - please try later. \033[0m")
-        raise Exception
+        raise 
     
     
     # check that commitTx is of the right type.
@@ -118,13 +118,13 @@ def get_batch_root_hash(l1_batch):
         tx = ethweb3.eth.get_transaction(commitTx)
     except Exception as e:
         print(f"An error occurred: {e}")
-        return
+        raise
     
     try:
         receipt = ethweb3.eth.get_transaction_receipt(commitTx)
     except Exception as e:
         print(f"An error occurred: {e}")
-        return
+        raise
     
     if receipt.status != 1:
         print(f"\033[91m[FAIL] L1 commit tx {commitTx} is not successful. \033[0m")
@@ -146,13 +146,13 @@ def get_batch_root_hash(l1_batch):
             prove_tx = ethweb3.eth.get_transaction(proveTx)
         except Exception as e:
             print(f"An error occurred: {e}")
-            return
+            raise
     
         try:
             prove_receipt = ethweb3.eth.get_transaction_receipt(proveTx)
         except Exception as e:
             print(f"An error occurred: {e}")
-            return
+            raise
         
         if prove_receipt.to != receipt.to:
             print(f"\033[91m[FAIL] L1 commit tx was sent to different address than prove ts {receipt.to} vs {prove_receipt.to}. \033[0m")
@@ -320,7 +320,7 @@ def prove_tx_inclusion_in_chain(tx):
 #prove_tx_inclusion_in_chain('0x71dab3ace8c2f2f2810ec58d136e7efed145a87d6b3e6fbdc3db7222f2b50f54')
 #prove_tx_inclusion_in_chain('0x23948b6dac5703849490ba5336e1ef682485a0c82614ee26aff449def6093717')
 
-prove_tx_inclusion_in_chain('0xb07cf51bb1fb788e9ab4961af203ce1057cf40f2781007ff06e7c66b6fc814be')
+# prove_tx_inclusion_in_chain('0xb07cf51bb1fb788e9ab4961af203ce1057cf40f2781007ff06e7c66b6fc814be')
 
 
 #results = verify_tx_inclusion_in_block(TRANSACTION_TO_PROVE)

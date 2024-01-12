@@ -88,12 +88,3 @@ def verify_storage_proof(account, key, proof, value, index, roothash, debug=Fals
     if debug:
         print(f"Root hash is: {current_hash.hex()} - matching.")    
     
-    
-    
-
-
-    
-    #verify_storage_proof(address, key, storage_proof["proof"], storage_proof["value"], storage_proof["index"], "0xe5aaf538de0b0261e33190681aa8515fdec298bda95e6457fc30e6bf0460eb59")
-
-#00000000000000000000000033a3ffd50c5805ef071380bdebe76aea8dfe24af0000000000000000000000000000000000000000000000000000000000000008
-#00000000000000000000000000000000000000000000000000000000000000af0000000000000000000000000000000000000000000000000000000000000008
