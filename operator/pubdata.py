@@ -23,6 +23,7 @@ def unpack_value(data, index):
 
 
     val = data[index: index + packing_length]
+    index += packing_length
     return index, result_type, val
 
     
