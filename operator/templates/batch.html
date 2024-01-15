@@ -1,0 +1,99 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+    <link rel="stylesheet" type="text/css" href="{{ url_for('static', filename='style.css' ) }}">
+    <title>Home Page</title>
+</head>
+
+<body>
+
+
+    <div class="header">
+        <h1>Batch Status Dashboard</h1>
+    </div>
+
+
+    <div class="container">
+        <a href="batch/{{batch.id-1}}" style="font-size: x-large;">Prev</a>
+        <a href="batch/{{batch.id+1}}" style="font-size: x-large;">Next</a>
+
+        <h1>Batch info</h1>
+        <table class="table" style="width:60%">
+            <tr>
+                <td>Batch id</td>
+                <td>{{batch.id}}</td>
+            </tr>
+            <tr>
+                <td>Commit Tx:</td>
+                <td class="right-align-fixed-font"><a
+                        href="https://etherscan.io/tx/{{batch.commitTxHash}}">{{batch.commitTxHash}}</a></td>
+            </tr>
+            <tr>
+                <td>State root</td>
+                <td class="right-align-fixed-font">0x{{batch.newStateRoot}}</td>
+            </tr>
+            <tr>
+                <td>L2 -> L1 msg</td>
+                <td>{{batch.l1_l2_msg_counter}}</td>
+            </tr>
+            <tr>
+                <td>Large L2 -> L1 msg</td>
+                <td>{{batch.large_msg_counter}}</td>
+            </tr>
+            <tr>
+                <td>Published bytecodes</td>
+                <td>{{batch.bytecodes}}</td>
+            </tr>
+            <tr>
+                <td>Initial writes</td>
+                <td>{{batch.initial_writes_count}}</td>
+            </tr>
+
+            <tr>
+                <td>Repeated writes</td>
+                <td>{{batch.repeated_writes_count}}</td>
+            </tr>
+        </table>
+
+        <h1>Initial writes: </h1>
+        <table class="table">
+            <tr>
+                <td>key</td>
+                <td>Compression</td>
+                <td>Value</td>
+            </tr>
+            {% for key, value in batch.initial_writes.items() %}
+            <tr>
+                <td class="right-align-fixed-font">0x{{key}}</td>
+                <td>{{value[0]}}</td>
+                <td class="right-align-fixed-font">0x{{value[1]}}</td>
+            </tr>
+            {% endfor %}
+        </table>
+
+
+        <h1>Repeated writes:</h1>
+
+        <table class="table">
+            <tr>
+                <td>key</td>
+                <td>Compression</td>
+                <td>Value</td>
+            </tr>
+            {% for key, value in batch.repeated_writes.items() %}
+            <tr>
+                <td>0x{{key}}</td>
+                <td>{{value[0]}}</td>
+                <td class="right-align-fixed-font">0x{{value[1]}}</td>
+            </tr>
+            {% endfor %}
+        </table>
+
+
+
+    </div>
+
+</body>
+
+</html>

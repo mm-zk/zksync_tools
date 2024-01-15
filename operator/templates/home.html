@@ -1,0 +1,130 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+    <link rel="stylesheet" type="text/css" href="{{ url_for('static', filename='style.css' ) }}">
+    <title>Home Page</title>
+</head>
+
+<body>
+    <div class="header">
+        <h1>Blockchain Status Dashboard</h1>
+    </div>
+
+
+    <div class="container">
+        <div class="small_container">
+            <h1>Chain basic info</h1>
+            <table class="table">
+                <tr>
+                    <td>L2 URL & chain id</td>
+                    <td>{{l2.url}} @ {{l2.chain_id}}</td>
+                </tr>
+                <tr>
+                    <td>L1 URL & chain id</td>
+                    <td>{{l1.url}} @ {{l1.chain_id}}</td>
+                </tr>
+                <tr>
+                    <td>Contract on L1</td>
+                    <td>{{l2.proxy_contract}}</td>
+                </tr>
+                <tr>
+                    <td colspan="2" style="text-align: center; font-weight: bold;">Finances</td>
+                </tr>
+                <tr>
+                    <td>Base token:</td>
+                    <td><b>ETH</b></td>
+                </tr>
+                <tr>
+                    <td>Balance on L1 (ETH):</td>
+                    <td>{{l2.l1_balance_in_ether}}</td>
+                </tr>
+                <tr>
+                    <td>Balance on L2 (ETH):</td>
+                    <td>{{l2.balance_in_ether}}</td>
+                </tr>
+                <tr>
+                    <td>Balance delta (L2 / L1 in %s):</td>
+                    <td>{{(((l2.balance_in_ether / l2.l1_balance_in_ether)*10000)|round)/100}}%</td>
+                </tr>
+
+                <tr>
+                    <td>L2 gas price (Gwei)</td>
+                    <td>{{l2.gas_price_gwei}}</td>
+                </tr>
+                <tr>
+                    <td colspan="2" style="text-align: center; font-weight: bold;">Censorship</td>
+                </tr>
+                <tr>
+                    <td>
+                        Priority queue size
+                    </td>
+                    <td>
+                        {{l2.l1_priority_queue_size}}
+                    </td>
+                </tr>
+
+                <tr>
+                    <td colspan="2" style="text-align: center; font-weight: bold;">Batches</td>
+                </tr>
+                <tr>
+                    <td>
+                        Committed
+                    </td>
+                    <td>
+                        {{l2.l1_batches.committed}} <a href="batch/{{l2.l1_batches.committed}}">Latest batch info</a>
+                    </td>
+                </tr>
+
+                <tr>
+                    <td>
+                        Verified
+                    </td>
+                    <td>
+                        {{l2.l1_batches.verified}} ( -{{l2.l1_batches.committed - l2.l1_batches.verified}} )
+                        <a href="batch/{{l2.l1_batches.verified}}">Latest batch info</a>
+                    </td>
+                </tr>
+                <tr>
+                    <td>
+                        Executed
+                    </td>
+                    <td>
+                        {{l2.l1_batches.executed}} ( -{{l2.l1_batches.verified - l2.l1_batches.executed }} )
+                        <a href="batch/{{l2.l1_batches.executed}}">Latest batch info</a>
+                    </td>
+                </tr>
+                <tr>
+                    <td colspan="2" style="text-align: center; font-weight: bold;">Security</td>
+                </tr>
+                <tr>
+                    <td>
+                        Protocol version
+                    </td>
+                    <td>
+                        {{l2.protocol_version}}
+                    </td>
+                </tr>
+                <tr>
+                    <td>
+                        Bootloader hash
+                    </td>
+                    <td class="right-align-fixed-font">
+                        {{l2.bootloader}}
+                    </td>
+                </tr>
+                <tr>
+                    <td>
+                        Account abstraction hash
+                    </td>
+                    <td class="right-align-fixed-font">
+                        {{l2.accountcode}}
+                    </td>
+                </tr>
+            </table>
+        </div>
+    </div>
+
+</body>
+
+</html>
