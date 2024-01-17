@@ -2,6 +2,7 @@ from flask import Flask, render_template, abort
 from web3 import Web3
 from utils import get_main_contract, get_batch_details
 from calldata_utils import parse_commitcall_calldata
+from system_storage import get_system_context_state
 
 
 app = Flask(__name__)
@@ -18,6 +19,36 @@ l1 = {
     'url': ETH_URL
 }
 
+
+def format_int(value):
+    if not isinstance(value, int):
+        return value  # Optionally, handle non-integer inputs
+    reversed_str = str(value)[::-1]
+    formatted_str = '_'.join(reversed_str[i:i+3] for i in range(0, len(reversed_str), 3))
+    return formatted_str[::-1]
+
+def remove_leading_zeros_hex(hex_str):
+    # Check if the input is a string
+    if not isinstance(hex_str, str):
+        return hex_str  # Optionally, handle non-string inputs
+
+    # Remove leading zeros while keeping the '0x' prefix
+    cleaned_hex_str = '0x' + hex_str.lstrip("0x").lstrip("0")
+
+    # If the string becomes only '0x', it means the original number was 0
+    if cleaned_hex_str == '0x':
+        cleaned_hex_str = '0x0'
+
+    return cleaned_hex_str
+
+
+app.jinja_env.filters['format_int'] = format_int
+app.jinja_env.filters['remove_leading_zeros_hex'] = remove_leading_zeros_hex
+
+
+
+
+
 @app.route('/')
 def home():
     return render_template('home.html', l2=l2, l1=l1)
@@ -26,6 +57,18 @@ def home():
 @app.route('/box')
 def box():
     return render_template('box.html')
+
+@app.route('/system')
+def system():
+    block_id = 24279081
+    system_status = {
+        'block_id': block_id,
+        'system_context': get_system_context_state(zksync_url=L2_URL, block=block_id)
+    }
+
+
+    return render_template('system.html', system_status=system_status)
+
 
 
 @app.route('/batch/<int:batch_id>')

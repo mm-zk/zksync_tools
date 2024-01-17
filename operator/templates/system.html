@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+    <link rel="stylesheet" type="text/css" href="{{ url_for('static', filename='style.css' ) }}">
+    <title>Home Page</title>
+</head>
+
+<body>
+
+
+    <div class="header">
+        <h1>System state dashboard @ block {{system_status.block_id}}</h1>
+    </div>
+
+
+    <div class="container">
+        <table class="table" style="width:60%">
+            <tr>
+                <td colspan="3" style="text-align: center; font-weight: bold;">System context</td>
+
+            </tr>
+            <tr>
+                <td>Chain id</td>
+                <td>{{system_status.system_context.chainId | remove_leading_zeros_hex }}</td>
+            </tr>
+            <tr>
+                <td>Origin</td>
+                <td>{{system_status.system_context.origin | remove_leading_zeros_hex}}</td>
+            </tr>
+            <tr>
+                <td>Gas price</td>
+                <td>{{system_status.system_context.gasPrice | format_int}}</td>
+            </tr>
+            <tr>
+                <td>Current batch number & timestamp</td>
+                <td>{{system_status.system_context.currentBatchInfoTimestamp | format_int}}</td>
+                <td>{{system_status.system_context.currentBatchInfoNumber | format_int}}</td>
+            </tr>
+            <tr>
+                <td>Current block number & timestamp</td>
+                <td>{{system_status.system_context.currentBlockInfoTimestamp | format_int}}</td>
+                <td>{{system_status.system_context.currentBlockInfoNumber | format_int}}</td>
+            </tr>
+            <tr>
+                <td>Current virtual block number & timestamp</td>
+                <td>{{system_status.system_context.currentVirtualBlockInfoTimestamp | format_int}}</td>
+                <td>{{system_status.system_context.currentVirtualBlockInfoNumber | format_int}}</td>
+            </tr>
+
+
+        </table>
+
+    </div>
+
+</body>
+
+</html>
