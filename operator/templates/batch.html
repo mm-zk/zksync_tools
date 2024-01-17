@@ -26,26 +26,62 @@
             </tr>
             <tr>
                 <td>Commit Tx:</td>
+                <td></td>
                 <td class="right-align-fixed-font"><a
                         href="https://etherscan.io/tx/{{batch.commitTxHash}}">{{batch.commitTxHash}}</a></td>
             </tr>
             <tr>
                 <td>State root</td>
+                <td></td>
                 <td class="right-align-fixed-font">0x{{batch.newStateRoot}}</td>
             </tr>
             <tr>
-                <td>L2 -> L1 msg</td>
+                <td colspan="3" style="text-align: center; font-weight: bold;">System logs</td>
+            </tr>
+            {% for system_log in batch.parsed_system_logs %}
+            <tr>
+                <td>{{system_log.sender}}</td>
+                <td>{{system_log.key}}</td>
+                <td class=" right-align-fixed-font">0x{{system_log.value}}</td>
+            </tr>
+            {% endfor %}
+            <tr>
+                <td colspan="3" style="text-align: center; font-weight: bold;">Pubdata</td>
+            </tr>
+            <tr>
+                <td rowspan="4">Length</td>
+                <td>Total</td>
+                <td>{{batch.pubdata_length}}</td>
+            </tr>
+            <tr>
+                <td>Messages</td>
+                <td>{{batch.pubdata_msg_length}}</td>
+            </tr>
+            <tr>
+                <td>Bytecode</td>
+                <td>{{batch.pubdata_bytecode_length}}</td>
+            </tr>
+            <tr>
+                <td>State diff</td>
+                <td>{{batch.pubdata_statediff_length}}</td>
+            </tr>
+            <tr>
+                <td rowspan="2">User messages</td>
+
+                <td>Total count</td>
                 <td>{{batch.l1_l2_msg_counter}}</td>
             </tr>
             <tr>
-                <td>Large L2 -> L1 msg</td>
+                <td>Out of which - large</td>
                 <td>{{batch.large_msg_counter}}</td>
             </tr>
             <tr>
                 <td>Published bytecodes</td>
                 <td>{{batch.bytecodes}}</td>
             </tr>
+
             <tr>
+                <td rowspan="3">State diffs</td>
                 <td>Initial writes</td>
                 <td>{{batch.initial_writes_count}}</td>
             </tr>
@@ -53,6 +89,10 @@
             <tr>
                 <td>Repeated writes</td>
                 <td>{{batch.repeated_writes_count}}</td>
+            </tr>
+            <tr>
+                <td>Compression (lower is better) % </td>
+                <td>{{batch.statediff_compression_percent}}%</td>
             </tr>
         </table>
 

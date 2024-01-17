@@ -56,7 +56,7 @@ def batch(batch_id):
         print(f"An error occurred: {e}")
         raise
 
-    (new_state_root, pubdata_info) = parse_commitcall_calldata(commit_tx['input'], batch_id)
+    (new_state_root, pubdata_info, parsed_system_logs, pubdata_length) = parse_commitcall_calldata(commit_tx['input'], batch_id)
 
     batch['newStateRoot'] = new_state_root.hex()
 
@@ -69,6 +69,15 @@ def batch(batch_id):
 
     batch['initial_writes_count'] = len(pubdata_info[3])
     batch['repeated_writes_count'] = len(pubdata_info[4])
+    batch['parsed_system_logs'] = parsed_system_logs
+    batch['pubdata_length'] = pubdata_length
+    batch['pubdata_msg_length'] = pubdata_info[5][0]
+    batch['pubdata_bytecode_length'] = pubdata_info[5][1]
+    batch['pubdata_statediff_length'] = pubdata_info[5][2]
+    uncompressed = len(batch['initial_writes']) * 64 + len(batch["repeated_writes"]) * 40 
+    if uncompressed > 0:
+        batch['statediff_compression_percent'] = round((batch['pubdata_statediff_length']  * 100 / uncompressed))
+
 
     return render_template('batch.html', batch=batch)
 

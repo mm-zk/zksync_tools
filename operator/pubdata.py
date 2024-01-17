@@ -103,7 +103,9 @@ def parse_pubdata(pubdata, debug=False):
         msg_size = int.from_bytes(pubdata[index: index+4], 'big')
         if debug:
             print(f"msg size: {msg_size}")
-        index += 4 + msg_size 
+        index += 4 + msg_size
+
+    length_of_messages = index 
     bytecodes_size = int.from_bytes(pubdata[index: index+4], 'big')
     index += 4 
     if debug:
@@ -113,11 +115,14 @@ def parse_pubdata(pubdata, debug=False):
         print(f"bytecode size: {msg_size}")
         index += 4 + msg_size 
 
+    length_of_bytecodes = index - length_of_messages
+
     state_diff = pubdata[index:]
     if debug:
         print(f"State diff size: {len(state_diff)}")
     (initial_writes, repeated_writes) = parse_state_diff(state_diff, debug)
 
-    return (l1_l2_msg_counter, large_msg_counter, bytecodes_size, initial_writes, repeated_writes)
+    return (l1_l2_msg_counter, large_msg_counter, bytecodes_size, initial_writes, repeated_writes, 
+            [length_of_messages, length_of_bytecodes, len(state_diff)])
 
 
