@@ -2,7 +2,7 @@ from flask import Flask, render_template, abort
 from web3 import Web3
 from utils import get_main_contract, get_batch_details
 from calldata_utils import parse_commitcall_calldata
-from system_storage import get_system_context_state
+from system_storage import get_system_context_state, get_l1_state_storage
 
 
 app = Flask(__name__)
@@ -280,6 +280,10 @@ def update_info():
     l2['bootloader'] = contract.functions.getL2BootloaderBytecodeHash().call().hex()
     l2['accountcode'] = contract.functions.getL2DefaultAccountBytecodeHash().call().hex()
     l2['protocol_version'] = contract.functions.getProtocolVersion().call()
+
+    l1_state_storage = get_l1_state_storage(ETH_URL, l2['proxy_contract'], "latest")
+
+    l2["l1_state"] = l1_state_storage
 
 if __name__ == '__main__':
     update_info()

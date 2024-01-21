@@ -121,6 +121,76 @@
                         {{l2.accountcode}}
                     </td>
                 </tr>
+                <tr>
+                    <td colspan="2" style="text-align: center; font-weight: bold;">L1 contract state</td>
+                </tr>
+                <tr>
+                    <td>
+                        Governor
+                    </td>
+                    <td>
+                        {{l2.l1_state.governor | remove_leading_zeros_hex}}
+                    </td>
+                </tr>
+                <tr>
+                    <td>
+                        Verifier
+                    </td>
+                    <td>
+                        {{l2.l1_state.verifier | remove_leading_zeros_hex}}
+                    </td>
+                </tr>
+                <tr>
+                    <td colspan="2" style="text-align: center; font-weight: bold;">
+                        Verification keys
+                    </td>
+                </tr>
+                <tr>
+                    <td>
+                        Node
+                    </td>
+                    <td>
+                        {{l2.l1_state.verifier_params.node}}
+                    </td>
+                </tr>
+                <tr>
+                    <td>
+                        Leaf
+                    </td>
+                    <td>
+                        {{l2.l1_state.verifier_params.leaf}}
+                    </td>
+                </tr>
+                <tr>
+                    <td>
+                        Circuit
+                    </td>
+                    <td>
+                        {{l2.l1_state.verifier_params.circuit}}
+                    </td>
+                </tr>
+                <tr>
+                    <td colspan="2" style="text-align: center; font-weight: bold;">
+                        Upgrade
+                    </td>
+                </tr>
+
+                <tr>
+                    <td>
+                        Tx hash
+                    </td>
+                    <td>
+                        {{l2.l1_state.upgrade.tx_hash}}
+                    </td>
+                </tr>
+                <tr>
+                    <td>
+                        Batch
+                    </td>
+                    <td>
+                        {{l2.l1_state.upgrade.batch}}
+                    </td>
+                </tr>
             </table>
         </div>
     </div>

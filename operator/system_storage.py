@@ -4,7 +4,7 @@ import json
 
 def get_storage_at(zksync_url, account, key, block):
     headers = {"Content-Type": "application/json"}
-    data = {"jsonrpc": "2.0", "id": 1, "method": "eth_getStorageAt", "params": [account, key, hex(block)]}
+    data = {"jsonrpc": "2.0", "id": 1, "method": "eth_getStorageAt", "params": [account, key, block if block == "latest" else hex(block)]}
     response = requests.post(zksync_url, headers=headers, data=json.dumps(data))
     print(response.json())
     return response.json()["result"]
@@ -37,12 +37,6 @@ def get_system_context_state(zksync_url, block):
     (currentVirtualBlockInfoTimestamp, currentVirtualBlockInfoNumber) = split_u128(get_storage_at(zksync_url, SYSTEM_CONTEXT_ADDRESS, key="0x10c", block=block))
     # upgrade info - 0x10d
 
-
-
-
-
-
-
     return {
         'chainId': chainId,
         'origin': origin,
@@ -61,3 +55,51 @@ def get_system_context_state(zksync_url, block):
 
 
 # TODO: add bytecode hashes of the system contracts
+
+
+def get_l1_state_storage(l1_url, l1_contract, block):
+    governor = get_storage_at(l1_url, l1_contract, "0x7", block)
+    # 0x8 - pending governor
+    # 0x9 - mapping of validators
+    verifier = get_storage_at(l1_url, l1_contract, "0xa", block)
+    # 0xb - total batches exec
+    # 0xc - total batches verified
+    # 0xd - total batched commit
+    # 0xe - stored batch hashes (mapping)
+    # 0xf - l2Logs root mathes (mapping)
+    # 0x10 - 12 - priority queue (mapping + start + end)
+    # 0x13 - deprecated allow list
+    # 0x14, 15, 16 - verifier params
+    verifier_params = {
+        'node': get_storage_at(l1_url, l1_contract, "0x14", block),
+        'leaf': get_storage_at(l1_url, l1_contract, "0x15", block),
+        'circuit': get_storage_at(l1_url, l1_contract, "0x16", block)
+    }
+    # 0x17 - bootloader hash
+    # 0x18 - default account hash
+    # 0x19 - zkporter
+    # 0x1a - priorityTxmax limit
+    # 0x1b - 0x1c (Upgrade storage - deprecated)
+    # 0x1d - is withdraw finalized - mapping
+    # 0x1e - deprecated - last limit
+    # 0x1f - depreacated - withdrawn
+    # 0x20 - deprecated total deposits (mapping)
+    # 0x21 - protocol version
+    # 0x22 - contracts upgrade tx hash
+    # 0x23 - contracts upgrade batch number
+
+    upgrade = {
+        'tx_hash': get_storage_at(l1_url, l1_contract, "0x22", block),
+        'batch': get_storage_at(l1_url, l1_contract, "0x23", block),
+    }
+    # 0x24 - admin
+    # 0x25 - pending admin
+    # 0x26 - pricing mode (new)
+
+
+    return {
+        'governor': governor,
+        'verifier': verifier,
+        'verifier_params': verifier_params,
+        'upgrade': upgrade
+    }
