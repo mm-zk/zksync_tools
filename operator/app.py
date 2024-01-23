@@ -1,4 +1,5 @@
 from flask import Flask, render_template, abort
+from flask_caching import Cache
 from web3 import Web3
 from utils import get_main_contract, get_batch_details
 from calldata_utils import parse_commitcall_calldata
@@ -6,18 +7,14 @@ from system_storage import get_system_context_state, get_l1_state_storage
 
 
 app = Flask(__name__)
+cache = Cache(app, config={'CACHE_TYPE': 'simple'})
+
 
 L2_URL = 'https://mainnet.era.zksync.io'
 ETH_URL = 'https://rpc.ankr.com/eth'
 
 
-l2 = {
-    'url': L2_URL,
-}
 
-l1 = {
-    'url': ETH_URL
-}
 
 
 def format_int(value):
@@ -50,7 +47,9 @@ app.jinja_env.filters['remove_leading_zeros_hex'] = remove_leading_zeros_hex
 
 
 @app.route('/')
+@cache.memoize(60)
 def home():
+    (l1, l2) = update_info()
     return render_template('home.html', l2=l2, l1=l1)
 
 
@@ -72,6 +71,7 @@ def system():
 
 
 @app.route('/batch/<int:batch_id>')
+@cache.memoize(60)
 def batch(batch_id):
     # Example function to generate text and data based on the ID
     batch = {
@@ -126,6 +126,13 @@ def batch(batch_id):
 
 
 def update_info():
+    l2 = {
+        'url': L2_URL,
+    }   
+
+    l1 = {
+        'url': ETH_URL
+    }
     web3 = Web3(Web3.HTTPProvider(L2_URL))
     # Check if connected successfully
     if not web3.is_connected():
@@ -284,7 +291,7 @@ def update_info():
     l1_state_storage = get_l1_state_storage(ETH_URL, l2['proxy_contract'], "latest")
 
     l2["l1_state"] = l1_state_storage
+    return (l1, l2)
 
 if __name__ == '__main__':
-    update_info()
     app.run(debug=True)
