@@ -1,0 +1,86 @@
+<html>
+
+
+<head>
+    <script src="https://cdn.ethers.io/lib/ethers-5.2.umd.min.js"></script>
+</head>
+
+<body>
+    Hello
+
+    <script>
+        if (typeof ethers !== 'undefined') {
+            const abiCoder = new ethers.utils.AbiCoder();
+
+            const encodedData = abiCoder.encode(
+                ['uint256', 'uint256'],
+                ['1234', '1000000000000000000']
+            );
+
+            console.log("Encoded ABI: ", encodedData);
+        } else {
+            console.error("Ethers is not loaded!");
+        }
+
+        document.addEventListener("DOMContentLoaded", function () {
+            // Function to update the ABI encoded output
+            function updateAbiEncodedOutput() {
+                try {
+                    // Get values from inputs
+                    const value1 = document.getElementById('input1').value;
+                    const value2 = document.getElementById('input2').value;
+                    const value3 = document.getElementById('input3').value;
+
+                    // ABI encode the values
+                    const abiEncoded = ethers.utils.defaultAbiCoder.encode(
+                        ["uint256", "uint256", "uint256"],
+                        [value1, value2, value3]
+                    );
+
+                    // Compute Keccak-256 hash of the ABI encoded string
+                    const keccakHash = ethers.utils.keccak256(abiEncoded);
+
+                    // Update the output cells
+                    document.getElementById('output').innerText = abiEncoded;
+                    document.getElementById('hashOutput').innerText = keccakHash;
+
+
+                } catch (e) {
+                    // Handle encoding errors (e.g., invalid input)
+                    console.error(e);
+                    document.getElementById('output').innerText = 'Error in encoding';
+                }
+            }
+
+            // Attach event listeners to input fields
+            document.getElementById('input1').addEventListener('input', updateAbiEncodedOutput);
+            document.getElementById('input2').addEventListener('input', updateAbiEncodedOutput);
+            document.getElementById('input3').addEventListener('input', updateAbiEncodedOutput);
+
+            // Initial update
+            updateAbiEncodedOutput();
+        });
+    </script>
+
+
+    <input type="text" id="input1" placeholder="Enter uint256 value">
+    <input type="text" id="input2" placeholder="Enter uint256 value">
+    <input type="text" id="input3" placeholder="Enter uint256 value">
+
+    <table>
+        <tr>
+            <td>ABI Encoded Output:</td>
+            <td id="output"></td>
+        </tr>
+
+
+        <tr>
+            <td>Keccak-256 Hash:</td>
+            <td id="hashOutput"></td>
+        </tr>
+    </table>
+
+
+</body>
+
+</html>
