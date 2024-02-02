@@ -1,17 +1,22 @@
 from flask import Flask, render_template, abort
 from flask_caching import Cache
 from web3 import Web3
-from utils import get_main_contract, get_batch_details
+from utils import get_main_contract, get_batch_details, get_chain_id
 from calldata_utils import parse_commitcall_calldata
 from system_storage import get_system_context_state, get_l1_state_storage
-
+import json
 
 app = Flask(__name__)
+with open("operator/config.json",'r') as config_file:
+    config_data = json.load(config_file)
+app.config.update(config_data)
+
+
+
 cache = Cache(app, config={'CACHE_TYPE': 'simple'})
 
 
 L2_URL = 'https://mainnet.era.zksync.io'
-ETH_URL = 'https://rpc.ankr.com/eth'
 
 
 
@@ -46,16 +51,28 @@ app.jinja_env.filters['remove_leading_zeros_hex'] = remove_leading_zeros_hex
 
 
 
-@app.route('/')
+@app.route('/bridge/<l1_network>/<l2_network>')
 @cache.memoize(60)
-def home():
-    (l1, l2) = update_info()
+def brige(l1_network, l2_network):    
+    (l1, l2) = get_single_bridge_details(l1_network, l2_network)
     return render_template('home.html', l2=l2, l1=l1)
 
 
-@app.route('/box')
+@app.route('/')
 def box():
-    return render_template('box.html')
+    full_config = app.config["networks"]
+    for network in full_config:
+        full_config[network]["chain_id"] = get_chain_id(full_config[network]["l1_url"])
+        print(f"Got: {full_config[network]['chain_id']}")
+        for bridge in full_config[network]["single_bridges"]:
+            proxy_contract = get_main_contract(full_config[network]["single_bridges"][bridge]["l2_url"])
+            chain_id = get_chain_id(full_config[network]["single_bridges"][bridge]["l2_url"])
+            full_config[network]["single_bridges"][bridge]["proxy"] = proxy_contract
+            full_config[network]["single_bridges"][bridge]["chain_id"] = chain_id
+
+
+    
+    return render_template('box.html', networks=full_config)
 
 @app.route('/system')
 def system():
@@ -70,15 +87,18 @@ def system():
 
 
 
-@app.route('/batch/<int:batch_id>')
+@app.route('/batch/<l1_network>/<l2_network>/<int:batch_id>')
 @cache.memoize(60)
-def batch(batch_id):
+def batch(l1_network, l2_network, batch_id):
+    l1_config = app.config["networks"][l1_network]
+    l2_config = l1_config["single_bridges"][l2_network]
+
     # Example function to generate text and data based on the ID
     batch = {
         'id': batch_id
     }
 
-    batch_details = get_batch_details(L2_URL, batch_id)
+    batch_details = get_batch_details(l2_config["l2_url"], batch_id)
     if batch_details is None:
         return "Batch not found", 500
     if batch_details['commitTxHash'] is None:
@@ -87,7 +107,7 @@ def batch(batch_id):
 
     batch['commitTxHash'] = batch_details['commitTxHash']
 
-    ethweb3 = Web3(Web3.HTTPProvider(ETH_URL))
+    ethweb3 = Web3(Web3.HTTPProvider(l1_config["l1_url"]))
     # Check if connected successfully
     if not ethweb3.is_connected():
         print("Failed to connect to zkSync node.")
@@ -125,21 +145,27 @@ def batch(batch_id):
     return render_template('batch.html', batch=batch)
 
 
-def update_info():
+# Get information about single bridge (based on l1 and l2 network names)
+def get_single_bridge_details(l1_network, l2_network):
+    l1_config = app.config["networks"][l1_network]
+    l2_config = l1_config["single_bridges"][l2_network]
+    
     l2 = {
-        'url': L2_URL,
+        'url': l2_config["l2_url"],
+        'name': l2_network,
     }   
 
     l1 = {
-        'url': ETH_URL
+        'url': l1_config["l1_url"],
+        'name': l1_network,
     }
-    web3 = Web3(Web3.HTTPProvider(L2_URL))
+    web3 = Web3(Web3.HTTPProvider(l2_config["l2_url"]))
     # Check if connected successfully
     if not web3.is_connected():
         print("Failed to connect to zkSync node.")
         raise
     
-    ethweb3 = Web3(Web3.HTTPProvider(ETH_URL))
+    ethweb3 = Web3(Web3.HTTPProvider(l1_config["l1_url"]))
     # Check if connected successfully
     if not ethweb3.is_connected():
         print("Failed to connect to zkSync node.")
@@ -149,7 +175,7 @@ def update_info():
     l2['chain_id'] = web3.eth.chain_id
     l1['chain_id'] = ethweb3.eth.chain_id
 
-    l2['proxy_contract'] =  get_main_contract(L2_URL)
+    l2['proxy_contract'] =  get_main_contract(l2_config["l2_url"])
     
 
     l2['l1_balance'] = ethweb3.eth.get_balance(Web3.to_checksum_address(l2['proxy_contract']))
@@ -170,8 +196,6 @@ def update_info():
     ]
 
     l2_ether_contract = web3.eth.contract(address=Web3.to_checksum_address("0x000000000000000000000000000000000000800a"), abi=l2_ether_contract_abi)
-
-
 
     l2_context_contract_abi = [
         {
@@ -288,7 +312,7 @@ def update_info():
     l2['accountcode'] = contract.functions.getL2DefaultAccountBytecodeHash().call().hex()
     l2['protocol_version'] = contract.functions.getProtocolVersion().call()
 
-    l1_state_storage = get_l1_state_storage(ETH_URL, l2['proxy_contract'], "latest")
+    l1_state_storage = get_l1_state_storage(l1_config["l1_url"], l2['proxy_contract'], "latest")
 
     l2["l1_state"] = l1_state_storage
     return (l1, l2)

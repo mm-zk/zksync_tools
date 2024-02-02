@@ -7,55 +7,67 @@
 </head>
 
 <body>
+    {% for network, info in networks.items() %}
+    <div class="network-container">
+        <h1>{{network}} ({{info.chain_id}})</h1><br>
+        <h2>{{info.l1_url}}</h2><br>
+        {% for single_l2, single_l2_info in info.single_bridges.items() %}
 
-    <div class="container">
-        <div class="box" id="box1">
-            <p><b>zkSync Era</b></p>
-            <p><a>http://aaa.com</a></p>
-            <p>Chain id: <b>0x12345</b></p>
-        </div>
-        <div class="arrow">
-            <div style="height: 120px;">
-                &rarr;
+        <div class="container">
+            <div class="box" id="box1">
+                <p><b>{{single_l2}} ({{single_l2_info.chain_id}})</b></p>
+                <p><a>{{single_l2_info.l2_url}}</a></p>
+                <p><a>{{single_l2_info.explorer}}</a></p>
+
             </div>
-            <div class="text-under-arrow">
-                <p>Some text <a href="your-link.html">here</a>.</p>
+            <div class="arrow">
+                <div style="height: 120px;">
+                    &rarr;
+                </div>
+                <div class="text-under-arrow">
+                    <p><a href="bridge/{{network}}/{{single_l2}}">More info</a></p>
+                </div>
+            </div>
+            <div class="box" id="box2">
+                <p><b>{{single_l2}}_bridge</b></p>
+                <p>Diamond proxy:</p>
+                <p><a href={{info.explorer_prefix + single_l2_info.proxy}}>{{single_l2_info.proxy}}</a>
+                </p>
             </div>
         </div>
-        <div class="box" id="box2">
-            <p><b>Goerli</b></p>
-            <p><a>http://aaa.com</a></p>
-            <p>Chain id: <b>0x1</b></p>
+        {% endfor %}
+
+        {% for shared_l2, shared_l2_info in info.shared_bridges.items() %}
+
+        <div class="container">
+            <div class="sources">
+                {% for chain_name, chain_info in shared_l2_info.chains.items() %}
+                <div class="box" id="box1">
+                    <p><b>{{chain_name}} ({{chain_info.chain_id}})</b></p>
+                    <p><a>http://aaa.com</a></p>
+                    <p>Chain id: <b>{{chain_info.chain_id}}</b></p>
+                </div>
+
+                {% endfor %}
+            </div>
+            <div class="arrow">
+                <div style="height: 120px;">
+                    &rarr;
+                </div>
+                <div class="text-under-arrow">
+                    <p><a href="shared_bridge/{{network}}{{shared_l2}}">More info</a></p>
+                </div>
+            </div>
+            <div class="box" id="box2">
+                <p><b>{{shared_l2}}</b></p>
+                <p>Bridgehub: </p>
+                <p><a href={{info.explorer_prefix + shared_l2_info.bridgehub}}>{{shared_l2_info.bridgehub}}</a></p>
+            </div>
         </div>
+        {% endfor %}
     </div>
 
-    <div class="container">
-        <div class="sources">
-            <div class="box" id="box1">
-                <p><b>zkSync Era</b></p>
-                <p><a>http://aaa.com</a></p>
-                <p>Chain id: <b>0x12345</b></p>
-            </div>
-            <div class="box" id="box1">
-                <p><b>zkSync Other Era</b></p>
-                <p><a>http://aaa.com</a></p>
-                <p>Chain id: <b>0x12345</b></p>
-            </div>
-        </div>
-        <div class="arrow">
-            <div style="height: 120px;">
-                &rarr;
-            </div>
-            <div class="text-under-arrow">
-                <p>Some text <a href="your-link.html">here</a>.</p>
-            </div>
-        </div>
-        <div class="box" id="box2">
-            <p><b>Ethereum</b></p>
-            <p><a>http://aaa.com</a></p>
-            <p>Chain id: <b>0x1</b></p>
-        </div>
-    </div>
+    {% endfor %}
 </body>
 
 </html>

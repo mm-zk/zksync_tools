@@ -14,11 +14,15 @@
 
     <div class="container">
         <div class="small_container">
-            <h1>Chain basic info</h1>
+            <h1>{{l2.name}} chain basic info</h1>
             <table class="table">
                 <tr>
                     <td>L2 URL & chain id</td>
                     <td>{{l2.url}} @ {{l2.chain_id}}</td>
+                </tr>
+                <tr>
+                    <td>L1 chain</td>
+                    <td>{{l1.name}}</td>
                 </tr>
                 <tr>
                     <td>L1 URL & chain id</td>
@@ -72,7 +76,8 @@
                         Committed
                     </td>
                     <td>
-                        {{l2.l1_batches.committed}} <a href="batch/{{l2.l1_batches.committed}}">Latest batch info</a>
+                        {{l2.l1_batches.committed}} <a
+                            href="/batch/{{l1.name}}/{{l2.name}}/{{l2.l1_batches.committed}}">Latest batch info</a>
                     </td>
                 </tr>
 
@@ -82,7 +87,7 @@
                     </td>
                     <td>
                         {{l2.l1_batches.verified}} ( -{{l2.l1_batches.committed - l2.l1_batches.verified}} )
-                        <a href="batch/{{l2.l1_batches.verified}}">Latest batch info</a>
+                        <a href="/batch/{{l1.name}}/{{l2.name}}/{{l2.l1_batches.verified}}">Latest batch info</a>
                     </td>
                 </tr>
                 <tr>
@@ -91,7 +96,7 @@
                     </td>
                     <td>
                         {{l2.l1_batches.executed}} ( -{{l2.l1_batches.verified - l2.l1_batches.executed }} )
-                        <a href="batch/{{l2.l1_batches.executed}}">Latest batch info</a>
+                        <a href="/batch/{{l1.name}}/{{l2.name}}/{{l2.l1_batches.executed}}">Latest batch info</a>
                     </td>
                 </tr>
                 <tr>
