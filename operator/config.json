@@ -25,10 +25,16 @@
                     "bridgehub": "0x4A203a1391D339764B3A0956a608bBcBdA5D79fc",
                     "chains": {
                         "foo1": {
-                            "chain_id": "0x11b"
+                            "chain_id": "0x11b",
+                            "l2_url": "none",
+                            "explorer": "none",
+                            "type": "rollup",
                         },
                         "foo2": {
-                            "chain_id": "0x11a"
+                            "chain_id": "0x11a",
+                            "l2_url": "none",
+                            "explorer": "none",
+                            "type": "validium",
                         }
                     }
                 }

@@ -8,6 +8,13 @@ body {
     background-color: #f4f4f4;
 }
 
+.logo {
+    position: absolute;
+    top: 0;
+    left: 0;
+    max-width: 20%;
+}
+
 .network-container {
     display: flex;
     align-items: center;
@@ -59,4 +66,45 @@ a {
 
 a:hover {
     text-decoration: underline;
+}
+
+
+
+/* Table Styles */
+.table {
+    width: 100%;
+    margin-bottom: 20px;
+    border-collapse: collapse;
+}
+
+.table th,
+.table td {
+    padding: 12px;
+    border: 1px solid #ddd;
+    text-align: left;
+}
+
+.table th {
+    background-color: #4CAF50;
+    color: white;
+}
+
+.table tr:nth-child(even) {
+    background-color: #f2f2f2;
+}
+
+.table tr:hover {
+    background-color: #ddd;
+}
+
+/* Header Styles */
+.header {
+    background: #333;
+    color: #ffffff;
+    padding: 10px 0;
+    text-align: center;
+}
+
+.header h1 {
+    margin: 0;
 }

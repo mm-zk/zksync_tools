@@ -4,6 +4,7 @@ from web3 import Web3
 from utils import get_main_contract, get_batch_details, get_chain_id
 from calldata_utils import parse_commitcall_calldata
 from system_storage import get_system_context_state, get_l1_state_storage
+from shared_bridge_storage import get_chain_balance_info
 import json
 
 app = Flask(__name__)
@@ -16,7 +17,6 @@ app.config.update(config_data)
 cache = Cache(app, config={'CACHE_TYPE': 'simple'})
 
 
-L2_URL = 'https://mainnet.era.zksync.io'
 
 
 
@@ -28,6 +28,12 @@ def format_int(value):
     reversed_str = str(value)[::-1]
     formatted_str = '_'.join(reversed_str[i:i+3] for i in range(0, len(reversed_str), 3))
     return formatted_str[::-1]
+
+def format_eth(value):
+    if not isinstance(value, int):
+        return value  # Optionally, handle non-integer inputs
+    
+    return round(value / 10**18, 2)
 
 def remove_leading_zeros_hex(hex_str):
     # Check if the input is a string
@@ -45,6 +51,8 @@ def remove_leading_zeros_hex(hex_str):
 
 
 app.jinja_env.filters['format_int'] = format_int
+app.jinja_env.filters['format_eth'] = format_eth
+
 app.jinja_env.filters['remove_leading_zeros_hex'] = remove_leading_zeros_hex
 
 
@@ -53,9 +61,14 @@ app.jinja_env.filters['remove_leading_zeros_hex'] = remove_leading_zeros_hex
 
 @app.route('/bridge/<l1_network>/<l2_network>')
 @cache.memoize(60)
-def brige(l1_network, l2_network):    
+def bridge(l1_network, l2_network):    
     (l1, l2) = get_single_bridge_details(l1_network, l2_network)
-    return render_template('home.html', l2=l2, l1=l1)
+    return render_template('single_bridge.html', l2=l2, l1=l1)
+
+@app.route('/shared_bridge/<l1_network>/<l2_network>')
+@cache.memoize(60)
+def shared_bridge(l1_network, l2_network):    
+    return render_template('shared_bridge.html')
 
 
 @app.route('/')
@@ -63,20 +76,25 @@ def box():
     full_config = app.config["networks"]
     for network in full_config:
         full_config[network]["chain_id"] = get_chain_id(full_config[network]["l1_url"])
-        print(f"Got: {full_config[network]['chain_id']}")
         for bridge in full_config[network]["single_bridges"]:
             proxy_contract = get_main_contract(full_config[network]["single_bridges"][bridge]["l2_url"])
             chain_id = get_chain_id(full_config[network]["single_bridges"][bridge]["l2_url"])
             full_config[network]["single_bridges"][bridge]["proxy"] = proxy_contract
             full_config[network]["single_bridges"][bridge]["chain_id"] = chain_id
 
-
+        for shared_bridge in full_config[network]["shared_bridges"]:
+            for chain in full_config[network]["shared_bridges"][shared_bridge]["chains"]:
+                subchain_info = get_shared_bridge_chain_info(network,
+                                                             full_config[network]["shared_bridges"][shared_bridge]["bridgehub"],
+                                                             full_config[network]["shared_bridges"][shared_bridge]["chains"][chain]["chain_id"])
+                full_config[network]["shared_bridges"][shared_bridge]["chains"][chain]["details"] = subchain_info
     
     return render_template('box.html', networks=full_config)
 
 @app.route('/system')
 def system():
     block_id = 24279081
+    L2_URL = 'https://mainnet.era.zksync.io'
     system_status = {
         'block_id': block_id,
         'system_context': get_system_context_state(zksync_url=L2_URL, block=block_id)
@@ -145,6 +163,99 @@ def batch(l1_network, l2_network, batch_id):
     return render_template('batch.html', batch=batch)
 
 
+def get_shared_bridge_chain_info(l1_network, bridgehub, chain_id):
+    l1_config = app.config["networks"][l1_network]
+    ethweb3 = Web3(Web3.HTTPProvider(l1_config["l1_url"]))
+    # Check if connected successfully
+    if not ethweb3.is_connected():
+        print("Failed to connect to L1 node.")
+        raise Exception("Failed to connect to l1 node")
+
+
+    bridgehub_abi = [
+        {
+            "name": "stateTransitionManager",
+            "inputs": [
+                {
+                    "type": "uint256"
+                }
+            ],
+            "outputs": [
+                {
+                    "type": "address"
+                }
+            ],
+            "type": "function"
+        },
+        {
+            "name": "baseToken",
+            "inputs": [
+                {
+                    "type": "uint256"
+                }
+            ],
+            "outputs": [
+                {
+                    "type": "address"
+                }
+            ],
+            "type": "function"
+        },
+        {
+            "name": "baseTokenBridge",
+            "inputs": [
+                {
+                    "type": "uint256"
+                }
+            ],
+            "outputs": [
+                {
+                    "type": "address"
+                }
+            ],
+            "type": "function"
+        },
+    ]
+
+    bridgehub_contract = ethweb3.eth.contract(address=bridgehub, abi=bridgehub_abi)
+
+    basic_info = {
+        'state_transition_manager': bridgehub_contract.functions.stateTransitionManager(int(chain_id, 16)).call(),
+        'base_token': bridgehub_contract.functions.baseToken(int(chain_id, 16)).call(),
+        'base_token_bridge': bridgehub_contract.functions.baseTokenBridge(int(chain_id, 16)).call()
+    }
+
+    stm_abi = [
+        {
+            "name": "stateTransition",
+            "inputs": [
+                {
+                    "type": "uint256"
+                }
+            ],
+            "outputs": [
+                {
+                    "type": "address"
+                }
+            ],
+            "type": "function"
+        },
+    ]
+
+    stm_contract = ethweb3.eth.contract(address=basic_info['state_transition_manager'], abi=stm_abi)
+
+
+    basic_info["state_transition"] = stm_contract.functions.stateTransition(int(chain_id, 16)).call()
+
+    # this works only for l1 weth bridge for now.
+    basic_info['balance'] = get_chain_balance_info(l1_config["l1_url"], basic_info['base_token_bridge'], chain_id)
+
+
+
+    return basic_info
+
+
+
 # Get information about single bridge (based on l1 and l2 network names)
 def get_single_bridge_details(l1_network, l2_network):
     l1_config = app.config["networks"][l1_network]
@@ -162,13 +273,13 @@ def get_single_bridge_details(l1_network, l2_network):
     web3 = Web3(Web3.HTTPProvider(l2_config["l2_url"]))
     # Check if connected successfully
     if not web3.is_connected():
-        print("Failed to connect to zkSync node.")
+        print("Failed to connect to L2 node.")
         raise
     
     ethweb3 = Web3(Web3.HTTPProvider(l1_config["l1_url"]))
     # Check if connected successfully
     if not ethweb3.is_connected():
-        print("Failed to connect to zkSync node.")
+        print("Failed to connect to L1 node.")
         raise
 
     

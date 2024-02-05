@@ -7,6 +7,7 @@
 </head>
 
 <body>
+    <img src="{{ url_for('static', filename='logo.jpg' ) }}" class="logo">
     {% for network, info in networks.items() %}
     <div class="network-container">
         <h1>{{network}} ({{info.chain_id}})</h1><br>
@@ -17,7 +18,7 @@
             <div class="box" id="box1">
                 <p><b>{{single_l2}} ({{single_l2_info.chain_id}})</b></p>
                 <p><a>{{single_l2_info.l2_url}}</a></p>
-                <p><a>{{single_l2_info.explorer}}</a></p>
+                <p><a href="{{single_l2_info.explorer}}">{{single_l2_info.explorer}}</a></p>
 
             </div>
             <div class="arrow">
@@ -42,10 +43,72 @@
         <div class="container">
             <div class="sources">
                 {% for chain_name, chain_info in shared_l2_info.chains.items() %}
-                <div class="box" id="box1">
-                    <p><b>{{chain_name}} ({{chain_info.chain_id}})</b></p>
-                    <p><a>http://aaa.com</a></p>
-                    <p>Chain id: <b>{{chain_info.chain_id}}</b></p>
+                <div class="box">
+                    <table class="table">
+                        <tr>
+                            <th colspan="2" style="text-align: center;">{{chain_name}} ({{chain_info.chain_id}})</th>
+                        </tr>
+                        <tr>
+                            <td>RPC</td>
+                            <td>{{chain_info.l2_url}}</td>
+                        </tr>
+                        <tr>
+                            <td>Explorer</td>
+                            <td>
+                                <a href="{{chain_info.explorer}}">{{chain_info.explorer}}</a>
+                            </td>
+                        </tr>
+                        <tr>
+                            <td>Type</td>
+                            <td>{{chain_info.type}}</td>
+                        </tr>
+                        <tr>
+                            <td>State transition manager</td>
+                            <td>
+                                <a href="{{info.explorer_prefix + chain_info.details.state_transition_manager}}">
+                                    {{chain_info.details.state_transition_manager |
+                                    remove_leading_zeros_hex}}</a>
+                            </td>
+                        </tr>
+                        <tr>
+                            <td>
+                                State transition
+                            </td>
+                            <td>
+                                <a href={{info.explorer_prefix +
+                                    chain_info.details.state_transition}}>{{chain_info.details.state_transition |
+                                    remove_leading_zeros_hex}}</a>
+                            </td>
+                        </tr>
+                        <tr>
+                            <td>Base token</td>
+                            <td>
+                                {{chain_info.details.base_token | remove_leading_zeros_hex}}
+                            </td>
+                        </tr>
+                        <tr>
+                            <td>Base token bridge</td>
+                            <td>
+                                <a href={{info.explorer_prefix +
+                                    chain_info.details.base_token_bridge}}>{{chain_info.details.base_token_bridge |
+                                    remove_leading_zeros_hex}}</a>
+                            </td>
+                        </tr>
+                        <tr>
+                            <td>Token balance on bridge</td>
+                            <td>
+                                {{chain_info.details.balance.balance | format_int}} (
+                                {{chain_info.details.balance.balance | format_eth}} )
+                            </td>
+                        </tr>
+                        <tr>
+                            <td>Hyperbridge enabled</td>
+                            <td>
+                                {{chain_info.details.balance.hyperbridge_enabled | format_int}}
+                            </td>
+                        </tr>
+
+                    </table>
                 </div>
 
                 {% endfor %}
@@ -55,7 +118,7 @@
                     &rarr;
                 </div>
                 <div class="text-under-arrow">
-                    <p><a href="shared_bridge/{{network}}{{shared_l2}}">More info</a></p>
+                    <p><a href="shared_bridge/{{network}}/{{shared_l2}}">More info</a></p>
                 </div>
             </div>
             <div class="box" id="box2">
