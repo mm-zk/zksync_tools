@@ -8,7 +8,151 @@
 
 <body>
     <div class="header">
-        <h1>Shared bridge Blockchain Status Dashboard</h1>
+        <h1>Bridgehub Status Dashboard</h1>
     </div>
+
+    <div class="container">
+
+        <table class="table">
+            <tr>
+                <th>L2 name</th>
+                {% for chain in data.chains %}
+                <th>{{chain.name}}</th>
+                {% endfor %}
+            </tr>
+            <tr>
+                <td>Chain id</td>
+                {% for chain in data.chains %}
+                <td>{{chain.chain_id}}</td>
+                {% endfor %}
+            </tr>
+            <tr>
+                <td>State Transition</td>
+                {% for chain in data.chains %}
+                <td><a href={{data.explorer_prefix +
+                        chain.basic_info.state_transition}}>{{chain.basic_info.state_transition}}</a></td>
+                {% endfor %}
+            </tr>
+            <tr>
+                <td colspan="{{data.chain_count + 1}}" style="text-align: center; font-weight: bold;">Finances</td>
+            </tr>
+            <tr>
+                <td>Base token</td>
+                {% for chain in data.chains %}
+                <td>{{chain.basic_info.base_token}}</td>
+                {% endfor %}
+            </tr>
+            <tr>
+                <td>Base token bridge</td>
+                {% for chain in data.chains %}
+                <td><a href={{data.explorer_prefix +
+                        chain.basic_info.base_token_bridge}}>{{chain.basic_info.base_token_bridge}}</a></td>
+                {% endfor %}
+            </tr>
+            <tr>
+                <td>Balance on L2</td>
+                {% for chain in data.chains %}
+                <td>{{chain.basic_info.l2_balance}}</td>
+                {% endfor %}
+            </tr>
+            <tr>
+                <td>Balance on L1</td>
+                {% for chain in data.chains %}
+                <td>{{chain.basic_info.balance.balance | format_int}} ( {{chain.basic_info.balance.balance |
+                    format_eth}} ) </td>
+                {% endfor %}
+
+            </tr>
+            <tr>
+                <td>L2 gas price (Gwei)</td>
+                {% for chain in data.chains %}
+                <td>{{chain.basic_info.l2_gas_price}}</td>
+                {% endfor %}
+
+            </tr>
+            <tr>
+                <td colspan="{{data.chain_count + 1}}" style="text-align: center; font-weight: bold;">Censorship</td>
+            </tr>
+            <tr>
+                <td>
+                    Priority queue size
+                </td>
+                {% for chain in data.chains %}
+                <td>{{chain.l2.l1_priority_queue_size}}</td>
+                {% endfor %}
+            </tr>
+            <tr>
+                <td colspan="{{data.chain_count + 1}}" style="text-align: center; font-weight: bold;">Batches</td>
+            </tr>
+            <tr>
+                <td>
+                    Committed
+                </td>
+
+                {% for chain in data.chains %}
+                <td>{{chain.l2.l1_batches.committed}}</td>
+                {% endfor %}
+
+
+            </tr>
+
+            <tr>
+                <td>
+                    Verified
+                </td>
+                {% for chain in data.chains %}
+                <td>{{chain.l2.l1_batches.verified}}</td>
+                {% endfor %}
+
+            </tr>
+            <tr>
+                <td>
+                    Executed
+                </td>
+                {% for chain in data.chains %}
+                <td>{{chain.l2.l1_batches.executed}}</td>
+                {% endfor %}
+
+            </tr>
+            <tr>
+                <td colspan="{{data.chain_count + 1}}" style="text-align: center; font-weight: bold;">Security</td>
+            </tr>
+            <tr>
+                <td>
+                    Protocol version
+                </td>
+                {% for chain in data.chains %}
+                <td>{{chain.l2.protocol_version}}</td>
+                {% endfor %}
+
+            </tr>
+            <tr>
+                <td>
+                    Bootloader hash
+                </td>
+                {% for chain in data.chains %}
+                <td class="right-align-fixed-font">
+                    {{chain.l2.bootloader}}
+                </td>
+
+                {% endfor %}
+
+            </tr>
+            <tr>
+                <td>
+                    Account abstraction hash
+                </td>
+                {% for chain in data.chains %}
+                <td class="right-align-fixed-font">
+                    {{chain.l2.accountcode}}
+                </td>
+                {% endfor %}
+
+            </tr>
+
+    </div>
+
+    </table>
+
 
 </body>

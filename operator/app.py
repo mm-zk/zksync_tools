@@ -16,12 +16,6 @@ app.config.update(config_data)
 
 cache = Cache(app, config={'CACHE_TYPE': 'simple'})
 
-
-
-
-
-
-
 def format_int(value):
     if not isinstance(value, int):
         return value  # Optionally, handle non-integer inputs
@@ -68,10 +62,11 @@ def bridge(l1_network, l2_network):
 @app.route('/shared_bridge/<l1_network>/<l2_network>')
 @cache.memoize(60)
 def shared_bridge(l1_network, l2_network):    
-    return render_template('shared_bridge.html')
+    return render_template('shared_bridge.html', data=get_shared_bridge_details(l1_network, l2_network))
 
 
 @app.route('/')
+@cache.memoize(60)
 def box():
     full_config = app.config["networks"]
     for network in full_config:
@@ -255,81 +250,45 @@ def get_shared_bridge_chain_info(l1_network, bridgehub, chain_id):
     return basic_info
 
 
+def get_shared_bridge_chain_id_details(l1_network, l2_config, chain_name):
+    config = l2_config["chains"][chain_name]
+    basic_info = get_shared_bridge_chain_info(l1_network, l2_config["bridgehub"], config["chain_id"])
+    basic_info['l2_balance'] = "No RPC provided"
+    basic_info['l2_gas_price'] = "No RPC provided"
 
-# Get information about single bridge (based on l1 and l2 network names)
-def get_single_bridge_details(l1_network, l2_network):
     l1_config = app.config["networks"][l1_network]
-    l2_config = l1_config["single_bridges"][l2_network]
-    
-    l2 = {
-        'url': l2_config["l2_url"],
-        'name': l2_network,
-    }   
-
-    l1 = {
-        'url': l1_config["l1_url"],
-        'name': l1_network,
-    }
-    web3 = Web3(Web3.HTTPProvider(l2_config["l2_url"]))
-    # Check if connected successfully
-    if not web3.is_connected():
-        print("Failed to connect to L2 node.")
-        raise
-    
     ethweb3 = Web3(Web3.HTTPProvider(l1_config["l1_url"]))
     # Check if connected successfully
     if not ethweb3.is_connected():
         print("Failed to connect to L1 node.")
         raise
 
-    
-    l2['chain_id'] = web3.eth.chain_id
-    l1['chain_id'] = ethweb3.eth.chain_id
+    l2_proxy_info = get_diamond_proxy_info(ethweb3, basic_info["state_transition"])
+    return {
+        'name': chain_name,
+        'chain_id': config["chain_id"],
+        'basic_info': basic_info,
+        'l2': l2_proxy_info,
+    }
 
-    l2['proxy_contract'] =  get_main_contract(l2_config["l2_url"])
-    
-
-    l2['l1_balance'] = ethweb3.eth.get_balance(Web3.to_checksum_address(l2['proxy_contract']))
-
-    l2['l1_balance_in_ether'] = Web3.from_wei(l2['l1_balance'], 'ether')
-
-    l2_ether_contract_abi = [
-        {
-            "name": "totalSupply",
-            "inputs": [],
-            "outputs": [
-                {
-                    "type": "uint256"
-                }
-            ],
-            "type": "function"
-        },
+def get_shared_bridge_details(l1_network, l2_network):
+    l1_config = app.config["networks"][l1_network]
+    l2_config = l1_config["shared_bridges"][l2_network]
+    chains = [
+        get_shared_bridge_chain_id_details(l1_network, l2_config, name) for name in l2_config["chains"].keys()
     ]
 
-    l2_ether_contract = web3.eth.contract(address=Web3.to_checksum_address("0x000000000000000000000000000000000000800a"), abi=l2_ether_contract_abi)
-
-    l2_context_contract_abi = [
-        {
-            "name": "gasPrice",
-            "inputs": [],
-            "outputs": [
-                {
-                    "type": "uint256"
-                }
-            ],
-            "type": "function"
-        },
-    ]
-
-    l2_context_contract = web3.eth.contract(address=Web3.to_checksum_address("0x000000000000000000000000000000000000800b"), abi=l2_context_contract_abi)
+    return {
+        'chain_count': len(l2_config["chains"]),
+        'chains': chains,
+        'explorer_prefix': l1_config['explorer_prefix']
+    }
 
 
-    l2['gas_price'] = l2_context_contract.functions.gasPrice().call()
-    l2['gas_price_gwei'] = Web3.from_wei(l2['gas_price'], 'gwei')
 
-    l2['balance'] = l2_ether_contract.functions.totalSupply().call()
-    l2['balance_in_ether'] = Web3.from_wei(l2['balance'], 'ether')
 
+def get_diamond_proxy_info(provider, address):
+    l2 = {}
     contract_abi = [
         {
             "name": "getPriorityQueueSize",
@@ -409,7 +368,7 @@ def get_single_bridge_details(l1_network, l2_network):
 
     ]
 
-    contract = ethweb3.eth.contract(address=Web3.to_checksum_address(l2['proxy_contract']), abi=contract_abi)
+    contract = provider.eth.contract(address=Web3.to_checksum_address(address), abi=contract_abi)
 
     l2['l1_priority_queue_size'] = contract.functions.getPriorityQueueSize().call()
 
@@ -422,6 +381,85 @@ def get_single_bridge_details(l1_network, l2_network):
     l2['bootloader'] = contract.functions.getL2BootloaderBytecodeHash().call().hex()
     l2['accountcode'] = contract.functions.getL2DefaultAccountBytecodeHash().call().hex()
     l2['protocol_version'] = contract.functions.getProtocolVersion().call()
+    return l2
+
+
+# Get information about single bridge (based on l1 and l2 network names)
+def get_single_bridge_details(l1_network, l2_network):
+    l1_config = app.config["networks"][l1_network]
+    l2_config = l1_config["single_bridges"][l2_network]
+    
+    l2 = {
+        'url': l2_config["l2_url"],
+        'name': l2_network,
+    }   
+
+    l1 = {
+        'url': l1_config["l1_url"],
+        'name': l1_network,
+    }
+    web3 = Web3(Web3.HTTPProvider(l2_config["l2_url"]))
+    # Check if connected successfully
+    if not web3.is_connected():
+        print("Failed to connect to L2 node.")
+        raise
+    
+    ethweb3 = Web3(Web3.HTTPProvider(l1_config["l1_url"]))
+    # Check if connected successfully
+    if not ethweb3.is_connected():
+        print("Failed to connect to L1 node.")
+        raise
+
+    
+    l2['chain_id'] = web3.eth.chain_id
+    l1['chain_id'] = ethweb3.eth.chain_id
+
+    l2['proxy_contract'] =  get_main_contract(l2_config["l2_url"])
+    
+
+    l2['l1_balance'] = ethweb3.eth.get_balance(Web3.to_checksum_address(l2['proxy_contract']))
+
+    l2['l1_balance_in_ether'] = Web3.from_wei(l2['l1_balance'], 'ether')
+
+    l2_ether_contract_abi = [
+        {
+            "name": "totalSupply",
+            "inputs": [],
+            "outputs": [
+                {
+                    "type": "uint256"
+                }
+            ],
+            "type": "function"
+        },
+    ]
+
+    l2_ether_contract = web3.eth.contract(address=Web3.to_checksum_address("0x000000000000000000000000000000000000800a"), abi=l2_ether_contract_abi)
+
+    l2_context_contract_abi = [
+        {
+            "name": "gasPrice",
+            "inputs": [],
+            "outputs": [
+                {
+                    "type": "uint256"
+                }
+            ],
+            "type": "function"
+        },
+    ]
+
+    l2_context_contract = web3.eth.contract(address=Web3.to_checksum_address("0x000000000000000000000000000000000000800b"), abi=l2_context_contract_abi)
+
+
+    l2['gas_price'] = l2_context_contract.functions.gasPrice().call()
+    l2['gas_price_gwei'] = Web3.from_wei(l2['gas_price'], 'gwei')
+
+    l2['balance'] = l2_ether_contract.functions.totalSupply().call()
+    l2['balance_in_ether'] = Web3.from_wei(l2['balance'], 'ether')
+
+    l2.update(get_diamond_proxy_info(ethweb3, l2['proxy_contract']))
+    
 
     l1_state_storage = get_l1_state_storage(l1_config["l1_url"], l2['proxy_contract'], "latest")
 

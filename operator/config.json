@@ -28,13 +28,13 @@
                             "chain_id": "0x11b",
                             "l2_url": "none",
                             "explorer": "none",
-                            "type": "rollup",
+                            "type": "rollup"
                         },
                         "foo2": {
                             "chain_id": "0x11a",
                             "l2_url": "none",
                             "explorer": "none",
-                            "type": "validium",
+                            "type": "validium"
                         }
                     }
                 }
