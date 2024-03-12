@@ -32,7 +32,7 @@
             <div class="box" id="box2">
                 <p><b>{{single_l2}}_bridge</b></p>
                 <p>Diamond proxy:</p>
-                <p><a href={{info.explorer_prefix + single_l2_info.proxy}}>{{single_l2_info.proxy}}</a>
+                <p><a href={{info.explorer_address_prefix + single_l2_info.proxy}}>{{single_l2_info.proxy}}</a>
                 </p>
             </div>
         </div>
@@ -65,7 +65,8 @@
                         <tr>
                             <td>State transition manager</td>
                             <td>
-                                <a href="{{info.explorer_prefix + chain_info.details.state_transition_manager}}">
+                                <a
+                                    href="{{info.explorer_address_prefix + chain_info.details.state_transition_manager}}">
                                     {{chain_info.details.state_transition_manager |
                                     remove_leading_zeros_hex}}</a>
                             </td>
@@ -75,7 +76,7 @@
                                 State transition
                             </td>
                             <td>
-                                <a href={{info.explorer_prefix +
+                                <a href={{info.explorer_address_prefix +
                                     chain_info.details.state_transition}}>{{chain_info.details.state_transition |
                                     remove_leading_zeros_hex}}</a>
                             </td>
@@ -89,7 +90,7 @@
                         <tr>
                             <td>Base token bridge</td>
                             <td>
-                                <a href={{info.explorer_prefix +
+                                <a href={{info.explorer_address_prefix +
                                     chain_info.details.base_token_bridge}}>{{chain_info.details.base_token_bridge |
                                     remove_leading_zeros_hex}}</a>
                             </td>
@@ -124,7 +125,8 @@
             <div class="box" id="box2">
                 <p><b>{{shared_l2}}</b></p>
                 <p>Bridgehub: </p>
-                <p><a href={{info.explorer_prefix + shared_l2_info.bridgehub}}>{{shared_l2_info.bridgehub}}</a></p>
+                <p><a href={{info.explorer_address_prefix + shared_l2_info.bridgehub}}>{{shared_l2_info.bridgehub}}</a>
+                </p>
             </div>
         </div>
         {% endfor %}

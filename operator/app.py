@@ -155,7 +155,9 @@ def batch(l1_network, l2_network, batch_id):
         batch['statediff_compression_percent'] = round((batch['pubdata_statediff_length']  * 100 / uncompressed))
 
 
-    return render_template('batch.html', batch=batch)
+    return render_template('batch.html', batch=batch, data = {
+        "explorer_tx_prefix":  l1_config['explorer_prefix'] + "tx/"
+    })
 
 
 def get_shared_bridge_chain_info(l1_network, bridgehub, chain_id):
@@ -281,7 +283,8 @@ def get_shared_bridge_details(l1_network, l2_network):
     return {
         'chain_count': len(l2_config["chains"]),
         'chains': chains,
-        'explorer_prefix': l1_config['explorer_prefix']
+        'explorer_prefix': l1_config['explorer_prefix'],
+        'explorer_address_prefix:': l1_config['explorer_prefix'] + "address/",
     }
 
 
