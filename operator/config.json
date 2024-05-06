@@ -1,50 +1,25 @@
 {
     "networks": {
-        "mainnet": {
-            "l1_url": "https://rpc.ankr.com/eth",
-            "explorer_prefix": "https://etherscan.io/",
-            "explorer_address_prefix": "https://etherscan.io/address/",
-            "single_bridges": {
-                "era": {
-                    "l2_url": "https://mainnet.era.zksync.io",
-                    "explorer": "https://explorer.zksync.io/"
-                }
-            },
-            "shared_bridges": {}
-        },
-        "sepolia": {
-            "l1_url": "https://rpc.ankr.com/eth_sepolia",
+        "local": {
+            "l1_url": "http://localhost:8545",
             "explorer_prefix": "https://sepolia.etherscan.io/",
             "explorer_address_prefix": "https://sepolia.etherscan.io/address/",
-            "single_bridges": {
-                "testnet": {
-                    "l2_url": "https://sepolia.era.zksync.dev",
-                    "explorer": "https://sepolia.explorer.zksync.io/"
-                },
-                "stage": {
-                    "l2_url": "https://z2-dev-api.zksync.dev/",
-                    "explorer": "https://goerli-beta.staging-scan-v2.zksync.dev/"
-                },
-                "stage_proofs": {
-                    "l2_url": "https://dev-api.era-stage-proofs.zksync.dev/",
-                    "explorer": "https://dev-api-explorer.era-stage-proofs.zksync.dev"
-                }
-            },
+            "single_bridges": {},
             "shared_bridges": {
                 "kl_exp": {
-                    "bridgehub": "0x4A203a1391D339764B3A0956a608bBcBdA5D79fc",
+                    "bridgehub": "0xE6f58EfB81c353Db0337D7E364EcbD3b7d0a76Dd",
                     "chains": {
                         "foo1": {
-                            "chain_id": "0x11b",
-                            "l2_url": "none",
+                            "chain_id": "0x10e",
+                            "l2_url": "http://localhost:3050",
                             "explorer": "none",
                             "type": "rollup"
                         },
-                        "foo2": {
-                            "chain_id": "0x11a",
-                            "l2_url": "none",
+                        "slave1": {
+                            "chain_id": "0x110",
+                            "l2_url": "http://localhost:3060",
                             "explorer": "none",
-                            "type": "validium"
+                            "type": "rollup"
                         }
                     }
                 }

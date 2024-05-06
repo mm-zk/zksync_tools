@@ -49,24 +49,24 @@ app.jinja_env.filters['format_eth'] = format_eth
 
 app.jinja_env.filters['remove_leading_zeros_hex'] = remove_leading_zeros_hex
 
-
+MEMOISE_DURATION=1
 
 
 
 @app.route('/bridge/<l1_network>/<l2_network>')
-@cache.memoize(60)
+@cache.memoize(MEMOISE_DURATION)
 def bridge(l1_network, l2_network):    
     (l1, l2) = get_single_bridge_details(l1_network, l2_network)
     return render_template('single_bridge.html', l2=l2, l1=l1)
 
 @app.route('/shared_bridge/<l1_network>/<l2_network>')
-@cache.memoize(60)
+@cache.memoize(MEMOISE_DURATION)
 def shared_bridge(l1_network, l2_network):    
     return render_template('shared_bridge.html', data=get_shared_bridge_details(l1_network, l2_network))
 
 
 @app.route('/')
-@cache.memoize(60)
+@cache.memoize(MEMOISE_DURATION)
 def box():
     full_config = app.config["networks"]
     for network in full_config:
@@ -101,7 +101,7 @@ def system():
 
 
 @app.route('/batch/<l1_network>/<l2_network>/<int:batch_id>')
-@cache.memoize(60)
+@cache.memoize(MEMOISE_DURATION)
 def batch(l1_network, l2_network, batch_id):
     l1_config = app.config["networks"][l1_network]
     l2_config = l1_config["single_bridges"][l2_network]
@@ -199,12 +199,8 @@ def get_shared_bridge_chain_info(l1_network, bridgehub, chain_id):
             "type": "function"
         },
         {
-            "name": "baseTokenBridge",
-            "inputs": [
-                {
-                    "type": "uint256"
-                }
-            ],
+            "name": "sharedBridge",
+            "inputs": [],
             "outputs": [
                 {
                     "type": "address"
@@ -219,12 +215,12 @@ def get_shared_bridge_chain_info(l1_network, bridgehub, chain_id):
     basic_info = {
         'state_transition_manager': bridgehub_contract.functions.stateTransitionManager(int(chain_id, 16)).call(),
         'base_token': bridgehub_contract.functions.baseToken(int(chain_id, 16)).call(),
-        'base_token_bridge': bridgehub_contract.functions.baseTokenBridge(int(chain_id, 16)).call()
+        'base_token_bridge': bridgehub_contract.functions.sharedBridge().call()
     }
 
     stm_abi = [
         {
-            "name": "stateTransition",
+            "name": "getHyperchain",
             "inputs": [
                 {
                     "type": "uint256"
@@ -242,10 +238,9 @@ def get_shared_bridge_chain_info(l1_network, bridgehub, chain_id):
     stm_contract = ethweb3.eth.contract(address=basic_info['state_transition_manager'], abi=stm_abi)
 
 
-    basic_info["state_transition"] = stm_contract.functions.stateTransition(int(chain_id, 16)).call()
+    basic_info["state_transition"] = stm_contract.functions.getHyperchain(int(chain_id, 16)).call()
 
-    # this works only for l1 weth bridge for now.
-    basic_info['balance'] = get_chain_balance_info(l1_config["l1_url"], basic_info['base_token_bridge'], chain_id)
+    basic_info['balance'] = get_chain_balance_info(l1_config["l1_url"], basic_info['base_token_bridge'], chain_id, basic_info['base_token'])
 
 
 
