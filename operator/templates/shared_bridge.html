@@ -52,7 +52,7 @@
             <tr>
                 <td>Balance on L2</td>
                 {% for chain in data.chains %}
-                <td>{{chain.basic_info.l2_balance}}</td>
+                <td>{{chain.basic_info.l2_balance | format_int}} ( {{chain.basic_info.l2_balance | format_eth}} ) </td>
                 {% endfor %}
             </tr>
             <tr>
@@ -66,7 +66,7 @@
             <tr>
                 <td>L2 gas price (Gwei)</td>
                 {% for chain in data.chains %}
-                <td>{{chain.basic_info.l2_gas_price}}</td>
+                <td>{{chain.basic_info.l2_gas_price | format_int}}</td>
                 {% endfor %}
 
             </tr>

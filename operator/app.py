@@ -246,12 +246,41 @@ def get_shared_bridge_chain_info(l1_network, bridgehub, chain_id):
 
     return basic_info
 
+def get_l2_balance(web3):
+    l2_ether_contract_abi = [
+        {
+            "name": "totalSupply",
+            "inputs": [],
+            "outputs": [
+                {
+                    "type": "uint256"
+                }
+            ],
+            "type": "function"
+        },
+    ]
+
+    l2_ether_contract = web3.eth.contract(address=Web3.to_checksum_address("0x000000000000000000000000000000000000800a"), abi=l2_ether_contract_abi)
+    balance = l2_ether_contract.functions.totalSupply().call()
+    balance_in_ether = Web3.from_wei(balance, 'ether')
+
+    return (balance, balance_in_ether)
+
+
 
 def get_shared_bridge_chain_id_details(l1_network, l2_config, chain_name):
     config = l2_config["chains"][chain_name]
     basic_info = get_shared_bridge_chain_info(l1_network, l2_config["bridgehub"], config["chain_id"])
-    basic_info['l2_balance'] = "No RPC provided"
-    basic_info['l2_gas_price'] = "No RPC provided"
+
+
+    web3 = Web3(Web3.HTTPProvider(config["l2_url"]))
+    # Check if connected successfully
+    if not web3.is_connected():
+        print("Failed to connect to L2 node.")
+        raise
+
+    (basic_info['l2_balance'], _) = get_l2_balance(web3)
+    basic_info['l2_gas_price'] = web3.eth.gas_price
 
     l1_config = app.config["networks"][l1_network]
     ethweb3 = Web3(Web3.HTTPProvider(l1_config["l1_url"]))
