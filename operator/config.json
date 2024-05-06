@@ -49,18 +49,6 @@
                     }
                 }
             }
-        },
-        "goerli": {
-            "l1_url": "https://rpc.ankr.com/eth_goerli",
-            "explorer_prefix": "https://goerli.etherscan.io/",
-            "explorer_address_prefix": "https://goerli.etherscan.io/addresss/",
-            "single_bridges": {
-                "testnet": {
-                    "l2_url": "https://testnet.era.zksync.dev",
-                    "explorer": "https://goerli.explorer.zksync.io/"
-                }
-            },
-            "shared_bridges": {}
         }
     }
 }
