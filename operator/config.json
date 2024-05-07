@@ -2,23 +2,28 @@
     "networks": {
         "local": {
             "l1_url": "http://localhost:8545",
-            "explorer_prefix": "https://sepolia.etherscan.io/",
-            "explorer_address_prefix": "https://sepolia.etherscan.io/address/",
+            "explorer_prefix": "http://localhost:8099/",
+            "explorer_address_prefix": "http://localhost:8099/address/",
             "single_bridges": {},
             "shared_bridges": {
                 "kl_exp": {
-                    "bridgehub": "0xE6f58EfB81c353Db0337D7E364EcbD3b7d0a76Dd",
                     "chains": {
                         "foo1": {
                             "chain_id": "0x10e",
                             "l2_url": "http://localhost:3050",
-                            "explorer": "none",
+                            "explorer": "http://localhost:3010/?network=local",
                             "type": "rollup"
                         },
                         "slave1": {
                             "chain_id": "0x110",
                             "l2_url": "http://localhost:3060",
-                            "explorer": "none",
+                            "explorer": "http://localhost:3010/?network=local_slave1",
+                            "type": "rollup"
+                        },
+                        "slave2": {
+                            "chain_id": "0x111",
+                            "l2_url": "http://localhost:3070",
+                            "explorer": "http://localhost:3010/?network=local_slave2",
                             "type": "rollup"
                         }
                     }
