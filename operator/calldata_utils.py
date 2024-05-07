@@ -4,8 +4,9 @@ from collections import namedtuple
 
 from typing import List
 
-COMMIT_BATCHES_SELECTOR = "0x701f58c5"
-#    function commitBatches(
+COMMIT_BATCHES_SELECTOR = "0x6edd4f12"
+#    function commitBatchesSharedBridge(
+#        uint256 chain_id,
 #        StoredBatchInfo calldata _lastCommittedBatchData,
 #        CommitBatchInfo[] calldata _newBatchesData
 #    )
@@ -15,6 +16,8 @@ SYSTEM_LOG_SENDERS = {
     "0000000000000000000000000000000000008001": "Bootloader",
     "000000000000000000000000000000000000800b": "System context",
     "0000000000000000000000000000000000008008": "L1 messenger",
+    "0000000000000000000000000000000000008011": "Chunk publisher",
+
 }
 
 SYSTEM_LOG_KEYS = {
@@ -25,7 +28,13 @@ SYSTEM_LOG_KEYS = {
     "0000000000000000000000000000000000000000000000000000000000000004": "PREV_BATCH_HASH_KEY",
     "0000000000000000000000000000000000000000000000000000000000000005": "CHAINED_PRIORITY_TXN_HASH_KEY",
     "0000000000000000000000000000000000000000000000000000000000000006": "NUMBER_OF_LAYER_1_TXS_KEY",
-    "0000000000000000000000000000000000000000000000000000000000000007": "EXPECTED_SYSTEM_CONTRACT_UPGRADE_TX_HASH_KEY",
+    "0000000000000000000000000000000000000000000000000000000000000007": "BLOB_ONE_HASH_KEY",
+    "0000000000000000000000000000000000000000000000000000000000000008": "BLOB_TWO_HASH_KEY",
+    "0000000000000000000000000000000000000000000000000000000000000009": "BLOB_THREE_HASH_KEY",
+    "000000000000000000000000000000000000000000000000000000000000000a": "BLOB_FOUR_HASH_KEY",
+    "000000000000000000000000000000000000000000000000000000000000000b": "BLOB_FIVE_HASH_KEY",
+    "000000000000000000000000000000000000000000000000000000000000000c": "BLOB_SIX_HASH_KEY",
+    "000000000000000000000000000000000000000000000000000000000000000d": "EXPECTED_SYSTEM_CONTRACT_UPGRADE_TX_HASH_KEY",
 }
 
 
@@ -58,7 +67,7 @@ def parse_commitcall_calldata(calldata, batch_to_find):
         print(f"\033[91m[FAIL] Invalid selector {selector.hex()} - expected {COMMIT_BATCHES_SELECTOR}. \033[0m")
         raise Exception
     
-    (last_commited_batch_data_, new_batches_data) = decode(["(uint64,bytes32,uint64,uint256,bytes32,bytes32,uint256,bytes32)", "(uint64,uint64,uint64,bytes32,uint256,bytes32,bytes32,bytes32,bytes,bytes)[]"], calldata[4:])
+    (chain_id, last_commited_batch_data_, new_batches_data) = decode(["uint256", "(uint64,bytes32,uint64,uint256,bytes32,bytes32,uint256,bytes32)", "(uint64,uint64,uint64,bytes32,uint256,bytes32,bytes32,bytes32,bytes,bytes)[]"], calldata[4:])
 
     # We might be commiting multiple batches in one call - find the one that we're looking for
     selected_batch = None
@@ -71,8 +80,13 @@ def parse_commitcall_calldata(calldata, batch_to_find):
         raise Exception
     
     (batch_number_, timestamp_, index_repeated_storage_changes_, new_state_root_, num_l1_tx_, priority_op_hash_, bootloader_initial_heap_, events_queue_state_, system_logs_, total_pubdata_) = selected_batch
+    
 
     parsed_system_logs = parse_system_logs(system_logs_)
+    
     # Now we have to unpack the latest block hash.
-    pubdata_info = parse_pubdata(total_pubdata_)
-    return (new_state_root_, pubdata_info, parsed_system_logs, len(total_pubdata_))
+    # pubdata_info = parse_pubdata(total_pubdata_)
+    # We don't support reading from blobs yet.
+    pubdata_info = (0, 0, 0, {}, {}, [0, 0, 0])
+    
+    return (new_state_root_, pubdata_info, parsed_system_logs, len(total_pubdata_), chain_id)

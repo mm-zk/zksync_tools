@@ -6,12 +6,38 @@ from calldata_utils import parse_commitcall_calldata
 from system_storage import get_system_context_state, get_l1_state_storage
 from shared_bridge_storage import get_chain_balance_info
 import json
+import requests
 
 app = Flask(__name__)
 with open("operator/config.json",'r') as config_file:
     config_data = json.load(config_file)
-app.config.update(config_data)
 
+
+def get_bridgehub_contract(l2_url):
+    headers = {"Content-Type": "application/json"}
+    data = {"jsonrpc": "2.0", "id": 1, "method": "zks_getBridgehubContract", "params": []}
+    response = requests.post(l2_url, headers=headers, data=json.dumps(data))
+    return Web3.to_checksum_address(response.json()["result"])
+
+
+def detect_bridgehub(chains):
+    for chain in chains:
+        if "l2_url" in chains[chain]:
+            return get_bridgehub_contract(chains[chain]["l2_url"])
+    return None
+
+
+def autodetect_config(config_data):
+    full_config = config_data["networks"]
+    for network in full_config:
+        for shared_bridge in full_config[network]["shared_bridges"]:
+            if "bridgehub" not in full_config[network]["shared_bridges"][shared_bridge]:
+                config_data["networks"][network]["shared_bridges"][shared_bridge]["bridgehub"] = detect_bridgehub(config_data["networks"][network]["shared_bridges"][shared_bridge]["chains"])
+                
+
+
+autodetect_config(config_data)
+app.config.update(config_data)
 
 
 cache = Cache(app, config={'CACHE_TYPE': 'simple'})
@@ -132,7 +158,7 @@ def batch(l1_network, l2_network, batch_id):
         print(f"An error occurred: {e}")
         raise
 
-    (new_state_root, pubdata_info, parsed_system_logs, pubdata_length) = parse_commitcall_calldata(commit_tx['input'], batch_id)
+    (new_state_root, pubdata_info, parsed_system_logs, pubdata_length, chain_id) = parse_commitcall_calldata(commit_tx['input'], batch_id)
 
     batch['newStateRoot'] = new_state_root.hex()
 
@@ -158,6 +184,69 @@ def batch(l1_network, l2_network, batch_id):
     return render_template('batch.html', batch=batch, data = {
         "explorer_tx_prefix":  l1_config['explorer_prefix'] + "tx/"
     })
+
+@app.route('/batch_shared/<l1_network>/<shared_bridge>/<chain_name>/<int:batch_id>')
+@cache.memoize(MEMOISE_DURATION)
+def shared_bridge_batch(l1_network, shared_bridge, chain_name, batch_id):
+    l1_config = app.config["networks"][l1_network]
+    shared_bridge_config = l1_config["shared_bridges"][shared_bridge]
+
+    # Example function to generate text and data based on the ID
+    batch = {
+        'id': batch_id
+    }
+
+    batch_details = get_batch_details(shared_bridge_config["chains"][chain_name]["l2_url"], batch_id)
+    if batch_details is None:
+        return "Batch not found", 500
+    if batch_details['commitTxHash'] is None:
+        return "Batch not committed to L1 yet", 500
+        
+
+    batch['commitTxHash'] = batch_details['commitTxHash']
+    print(f"Commit tx hash is {batch['commitTxHash']}")
+
+    ethweb3 = Web3(Web3.HTTPProvider(l1_config["l1_url"]))
+    # Check if connected successfully
+    if not ethweb3.is_connected():
+        print("Failed to connect to zkSync node.")
+        raise
+
+    try:
+        commit_tx = ethweb3.eth.get_transaction(batch['commitTxHash'])
+    except Exception as e:
+        print(f"An error occurred: {e}")
+        raise
+
+    # TODO: currently pubdata parsing doesn't work - as we put the pubdata into the blobs.
+    (new_state_root, pubdata_info, parsed_system_logs, pubdata_length, chain_id) = parse_commitcall_calldata(commit_tx['input'], batch_id)
+
+    batch['newStateRoot'] = new_state_root.hex()
+    batch['chainId'] = chain_id
+
+    batch['l1_l2_msg_counter'] = pubdata_info[0]
+    batch['large_msg_counter'] = pubdata_info[1]
+    batch['bytecodes'] = pubdata_info[2]
+    batch['initial_writes'] = {k.hex():(v[0], v[1].hex()) for k,v in pubdata_info[3].items()}
+    
+    batch['repeated_writes'] = {k.hex():(v[0], v[1].hex()) for k,v in pubdata_info[4].items()}
+
+    batch['initial_writes_count'] = len(pubdata_info[3])
+    batch['repeated_writes_count'] = len(pubdata_info[4])
+    batch['parsed_system_logs'] = parsed_system_logs
+    batch['pubdata_length'] = pubdata_length
+    batch['pubdata_msg_length'] = pubdata_info[5][0]
+    batch['pubdata_bytecode_length'] = pubdata_info[5][1]
+    batch['pubdata_statediff_length'] = pubdata_info[5][2]
+    uncompressed = len(batch['initial_writes']) * 64 + len(batch["repeated_writes"]) * 40 
+    if uncompressed > 0:
+        batch['statediff_compression_percent'] = round((batch['pubdata_statediff_length']  * 100 / uncompressed))
+
+
+    return render_template('batch.html', batch=batch, data = {
+        "explorer_tx_prefix":  l1_config['explorer_prefix'] + "tx/"
+    })
+
 
 
 def get_shared_bridge_chain_info(l1_network, bridgehub, chain_id):
@@ -305,10 +394,12 @@ def get_shared_bridge_details(l1_network, l2_network):
     ]
 
     return {
+        'l1_network': l1_network,
+        'shared_bridge_name': l2_network,
         'chain_count': len(l2_config["chains"]),
         'chains': chains,
         'explorer_prefix': l1_config['explorer_prefix'],
-        'explorer_address_prefix:': l1_config['explorer_prefix'] + "address/",
+        'explorer_address_prefix': l1_config['explorer_prefix'] + "address/",
     }
 
 
