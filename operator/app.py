@@ -7,9 +7,12 @@ from system_storage import get_system_context_state, get_l1_state_storage
 from shared_bridge_storage import get_chain_balance_info
 import json
 import requests
+import os
+
 
 app = Flask(__name__)
-with open("operator/config.json",'r') as config_file:
+config_file = os.environ.get("CONFIG_FILE") or "operator/config.json"
+with open(config_file,'r') as config_file:
     config_data = json.load(config_file)
 
 
