@@ -1,28 +1,28 @@
 {
     "networks": {
         "local": {
-            "l1_url": "http://localhost:8545",
-            "explorer_prefix": "http://localhost:8099/",
-            "explorer_address_prefix": "http://localhost:8099/address/",
+            "l1_url": "http://localhost:15045",
+            "explorer_prefix": "http://localhost:15001/",
+            "explorer_address_prefix": "http://localhost:15001/address/",
             "single_bridges": {},
             "shared_bridges": {
                 "kl_exp": {
                     "chains": {
                         "foo1": {
                             "chain_id": "0x10e",
-                            "l2_url": "http://localhost:3050",
+                            "l2_url": "http://localhost:15100",
                             "explorer": "http://localhost:3010/?network=local",
                             "type": "rollup"
                         },
                         "slave1": {
                             "chain_id": "0x110",
-                            "l2_url": "http://localhost:3060",
+                            "l2_url": "http://localhost:15200",
                             "explorer": "http://localhost:3010/?network=local_slave1",
                             "type": "rollup"
                         },
                         "slave2": {
                             "chain_id": "0x111",
-                            "l2_url": "http://localhost:3070",
+                            "l2_url": "http://localhost:15300",
                             "explorer": "http://localhost:3010/?network=local_slave2",
                             "type": "rollup"
                         }

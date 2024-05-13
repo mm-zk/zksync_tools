@@ -332,11 +332,38 @@ def get_shared_bridge_chain_info(l1_network, bridgehub, chain_id):
 
     basic_info["state_transition"] = stm_contract.functions.getHyperchain(int(chain_id, 16)).call()
 
+    st_abi = [
+        {
+            "name": "getPubdataPricingMode",
+            "inputs": [
+            ],
+            "outputs": [
+                {
+                    "type": "uint256"
+                }
+            ],
+            "type": "function"
+        },
+    ]
+
+    st_contract = ethweb3.eth.contract(address=basic_info['state_transition'], abi=st_abi)
+    basic_info['pubdata_pricing_mode'] = st_contract.functions.getPubdataPricingMode().call()
+    
+    basic_info['pubdata_pricing_mode_str'] = pricing_mode(basic_info['pubdata_pricing_mode'])
+    
+
     basic_info['balance'] = get_chain_balance_info(l1_config["l1_url"], basic_info['base_token_bridge'], chain_id, basic_info['base_token'])
 
-
-
     return basic_info
+
+
+def pricing_mode(mode):
+    if mode == 0:
+        return "Rollup"
+    if mode == 1:
+        return "Validium"
+    
+    return f"Unknown mode {mode}"
 
 def get_l2_balance(web3):
     l2_ether_contract_abi = [
