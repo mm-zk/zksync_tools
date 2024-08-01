@@ -4,46 +4,52 @@
             "l1_url": "https://rpc.ankr.com/eth",
             "explorer_prefix": "https://etherscan.io/",
             "explorer_address_prefix": "https://etherscan.io/address/",
-            "single_bridges": {
-                "era": {
-                    "l2_url": "https://mainnet.era.zksync.io",
-                    "explorer": "https://explorer.zksync.io/"
+            "single_bridges": {},
+            "shared_bridges": {
+                "mainnet": {
+                    "bridgehub": "0x303a465B659cBB0ab36eE643eA362c509EEb5213",
+                    "chains": {
+                        "era": {
+                            "chain_id": "0x144",
+                            "l2_url": "https://mainnet.era.zksync.io",
+                            "explorer": "https://explorer.zksync.io/",
+                            "type": "rollup"
+                        },
+                        "cronos": {
+                            "chain_id": "0x184",
+                            "l2_url": "",
+                            "explorer": "",
+                            "type": "validium"
+                        }
+                    }
                 }
-            },
-            "shared_bridges": {}
+            }
         },
         "sepolia": {
             "l1_url": "https://rpc.ankr.com/eth_sepolia",
             "explorer_prefix": "https://sepolia.etherscan.io/",
             "explorer_address_prefix": "https://sepolia.etherscan.io/address/",
-            "single_bridges": {
-                "testnet": {
-                    "l2_url": "https://sepolia.era.zksync.dev",
-                    "explorer": "https://sepolia.explorer.zksync.io/"
-                },
-                "stage": {
-                    "l2_url": "https://z2-dev-api.zksync.dev/",
-                    "explorer": "https://goerli-beta.staging-scan-v2.zksync.dev/"
-                },
-                "stage_proofs": {
-                    "l2_url": "https://dev-api.era-stage-proofs.zksync.dev/",
-                    "explorer": "https://dev-api-explorer.era-stage-proofs.zksync.dev"
-                }
-            },
+            "single_bridges": {},
             "shared_bridges": {
-                "kl_exp": {
-                    "bridgehub": "0x4A203a1391D339764B3A0956a608bBcBdA5D79fc",
+                "testnet": {
+                    "bridgehub": "0x35A54c8C757806eB6820629bc82d90E056394C92",
                     "chains": {
-                        "foo1": {
-                            "chain_id": "0x11b",
-                            "l2_url": "none",
-                            "explorer": "none",
+                        "testnet": {
+                            "chain_id": "0x12c",
+                            "l2_url": "https://sepolia.era.zksync.dev",
+                            "explorer": "https://sepolia.explorer.zksync.io/",
                             "type": "rollup"
                         },
-                        "foo2": {
+                        "cronos_testnet": {
                             "chain_id": "0x11a",
-                            "l2_url": "none",
-                            "explorer": "none",
+                            "l2_url": "",
+                            "explorer": "",
+                            "type": "validium"
+                        },
+                        "gravity_testnet": {
+                            "chain_id": "0x146",
+                            "l2_url": "",
+                            "explorer": "",
                             "type": "validium"
                         }
                     }

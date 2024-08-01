@@ -15,8 +15,8 @@
 
 
     <div class="container">
-        <a href="batch/{{batch.id-1}}" style="font-size: x-large;">Prev</a>
-        <a href="batch/{{batch.id+1}}" style="font-size: x-large;">Next</a>
+        <a href="{{batch.id-1}}" style="font-size: x-large;">Prev</a>
+        <a href="{{batch.id+1}}" style="font-size: x-large;">Next</a>
 
         <h1>Batch info</h1>
         <table class="table" style="width:60%">
@@ -29,6 +29,11 @@
                 <td></td>
                 <td class="right-align-fixed-font"><a
                         href="{{data.explorer_tx_prefix}}/{{batch.commitTxHash}}">{{batch.commitTxHash}}</a></td>
+            </tr>
+            <tr>
+                <td>Chain id:</td>
+                <td></td>
+                <td class="right-align-fixed-font">{{batch.chainId}}</td>
             </tr>
             <tr>
                 <td>State root</td>
@@ -46,7 +51,7 @@
             </tr>
             {% endfor %}
             <tr>
-                <td colspan="3" style="text-align: center; font-weight: bold;">Pubdata</td>
+                <td colspan="3" style="text-align: center; font-weight: bold;">Pubdata [WIP due to blobs]</td>
             </tr>
             <tr>
                 <td rowspan="4">Length</td>

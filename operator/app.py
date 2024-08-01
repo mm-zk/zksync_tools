@@ -6,12 +6,41 @@ from calldata_utils import parse_commitcall_calldata
 from system_storage import get_system_context_state, get_l1_state_storage
 from shared_bridge_storage import get_chain_balance_info
 import json
+import requests
+import os
+
 
 app = Flask(__name__)
-with open("operator/config.json",'r') as config_file:
+config_file = os.environ.get("CONFIG_FILE") or "operator/config.json"
+with open(config_file,'r') as config_file:
     config_data = json.load(config_file)
-app.config.update(config_data)
 
+
+def get_bridgehub_contract(l2_url):
+    headers = {"Content-Type": "application/json"}
+    data = {"jsonrpc": "2.0", "id": 1, "method": "zks_getBridgehubContract", "params": []}
+    response = requests.post(l2_url, headers=headers, data=json.dumps(data))
+    return Web3.to_checksum_address(response.json()["result"])
+
+
+def detect_bridgehub(chains):
+    for chain in chains:
+        if "l2_url" in chains[chain]:
+            return get_bridgehub_contract(chains[chain]["l2_url"])
+    return None
+
+
+def autodetect_config(config_data):
+    full_config = config_data["networks"]
+    for network in full_config:
+        for shared_bridge in full_config[network]["shared_bridges"]:
+            if "bridgehub" not in full_config[network]["shared_bridges"][shared_bridge]:
+                config_data["networks"][network]["shared_bridges"][shared_bridge]["bridgehub"] = detect_bridgehub(config_data["networks"][network]["shared_bridges"][shared_bridge]["chains"])
+                
+
+
+autodetect_config(config_data)
+app.config.update(config_data)
 
 
 cache = Cache(app, config={'CACHE_TYPE': 'simple'})
@@ -28,6 +57,14 @@ def format_eth(value):
         return value  # Optionally, handle non-integer inputs
     
     return round(value / 10**18, 2)
+
+def format_protocol_version(value):
+    if not isinstance(value, int):
+        return value
+    # old protocols
+    if value < 25:
+        return value
+    return f"{value >> 32}.{value%(1<<32)}"
 
 def remove_leading_zeros_hex(hex_str):
     # Check if the input is a string
@@ -48,25 +85,26 @@ app.jinja_env.filters['format_int'] = format_int
 app.jinja_env.filters['format_eth'] = format_eth
 
 app.jinja_env.filters['remove_leading_zeros_hex'] = remove_leading_zeros_hex
+app.jinja_env.filters['format_protocol_version'] = format_protocol_version
 
-
+MEMOISE_DURATION=1
 
 
 
 @app.route('/bridge/<l1_network>/<l2_network>')
-@cache.memoize(60)
+@cache.memoize(MEMOISE_DURATION)
 def bridge(l1_network, l2_network):    
     (l1, l2) = get_single_bridge_details(l1_network, l2_network)
     return render_template('single_bridge.html', l2=l2, l1=l1)
 
 @app.route('/shared_bridge/<l1_network>/<l2_network>')
-@cache.memoize(60)
+@cache.memoize(MEMOISE_DURATION)
 def shared_bridge(l1_network, l2_network):    
     return render_template('shared_bridge.html', data=get_shared_bridge_details(l1_network, l2_network))
 
 
 @app.route('/')
-@cache.memoize(60)
+@cache.memoize(MEMOISE_DURATION)
 def box():
     full_config = app.config["networks"]
     for network in full_config:
@@ -101,7 +139,7 @@ def system():
 
 
 @app.route('/batch/<l1_network>/<l2_network>/<int:batch_id>')
-@cache.memoize(60)
+@cache.memoize(MEMOISE_DURATION)
 def batch(l1_network, l2_network, batch_id):
     l1_config = app.config["networks"][l1_network]
     l2_config = l1_config["single_bridges"][l2_network]
@@ -132,7 +170,7 @@ def batch(l1_network, l2_network, batch_id):
         print(f"An error occurred: {e}")
         raise
 
-    (new_state_root, pubdata_info, parsed_system_logs, pubdata_length) = parse_commitcall_calldata(commit_tx['input'], batch_id)
+    (new_state_root, pubdata_info, parsed_system_logs, pubdata_length, chain_id) = parse_commitcall_calldata(commit_tx['input'], batch_id)
 
     batch['newStateRoot'] = new_state_root.hex()
 
@@ -158,6 +196,69 @@ def batch(l1_network, l2_network, batch_id):
     return render_template('batch.html', batch=batch, data = {
         "explorer_tx_prefix":  l1_config['explorer_prefix'] + "tx/"
     })
+
+@app.route('/batch_shared/<l1_network>/<shared_bridge>/<chain_name>/<int:batch_id>')
+@cache.memoize(MEMOISE_DURATION)
+def shared_bridge_batch(l1_network, shared_bridge, chain_name, batch_id):
+    l1_config = app.config["networks"][l1_network]
+    shared_bridge_config = l1_config["shared_bridges"][shared_bridge]
+
+    # Example function to generate text and data based on the ID
+    batch = {
+        'id': batch_id
+    }
+
+    batch_details = get_batch_details(shared_bridge_config["chains"][chain_name]["l2_url"], batch_id)
+    if batch_details is None:
+        return "Batch not found", 500
+    if batch_details['commitTxHash'] is None:
+        return "Batch not committed to L1 yet", 500
+        
+
+    batch['commitTxHash'] = batch_details['commitTxHash']
+    print(f"Commit tx hash is {batch['commitTxHash']}")
+
+    ethweb3 = Web3(Web3.HTTPProvider(l1_config["l1_url"]))
+    # Check if connected successfully
+    if not ethweb3.is_connected():
+        print("Failed to connect to zkSync node.")
+        raise
+
+    try:
+        commit_tx = ethweb3.eth.get_transaction(batch['commitTxHash'])
+    except Exception as e:
+        print(f"An error occurred: {e}")
+        raise
+
+    # TODO: currently pubdata parsing doesn't work - as we put the pubdata into the blobs.
+    (new_state_root, pubdata_info, parsed_system_logs, pubdata_length, chain_id) = parse_commitcall_calldata(commit_tx['input'], batch_id)
+
+    batch['newStateRoot'] = new_state_root.hex()
+    batch['chainId'] = chain_id
+
+    batch['l1_l2_msg_counter'] = pubdata_info[0]
+    batch['large_msg_counter'] = pubdata_info[1]
+    batch['bytecodes'] = pubdata_info[2]
+    batch['initial_writes'] = {k.hex():(v[0], v[1].hex()) for k,v in pubdata_info[3].items()}
+    
+    batch['repeated_writes'] = {k.hex():(v[0], v[1].hex()) for k,v in pubdata_info[4].items()}
+
+    batch['initial_writes_count'] = len(pubdata_info[3])
+    batch['repeated_writes_count'] = len(pubdata_info[4])
+    batch['parsed_system_logs'] = parsed_system_logs
+    batch['pubdata_length'] = pubdata_length
+    batch['pubdata_msg_length'] = pubdata_info[5][0]
+    batch['pubdata_bytecode_length'] = pubdata_info[5][1]
+    batch['pubdata_statediff_length'] = pubdata_info[5][2]
+    uncompressed = len(batch['initial_writes']) * 64 + len(batch["repeated_writes"]) * 40 
+    if uncompressed > 0:
+        batch['statediff_compression_percent'] = round((batch['pubdata_statediff_length']  * 100 / uncompressed))
+
+
+    return render_template('batch.html', batch=batch, data = {
+        "explorer_tx_prefix":  l1_config['explorer_prefix'] + "tx/"
+    })
+
 
 
 def get_shared_bridge_chain_info(l1_network, bridgehub, chain_id):
@@ -199,12 +300,8 @@ def get_shared_bridge_chain_info(l1_network, bridgehub, chain_id):
             "type": "function"
         },
         {
-            "name": "baseTokenBridge",
-            "inputs": [
-                {
-                    "type": "uint256"
-                }
-            ],
+            "name": "sharedBridge",
+            "inputs": [],
             "outputs": [
                 {
                     "type": "address"
@@ -219,12 +316,12 @@ def get_shared_bridge_chain_info(l1_network, bridgehub, chain_id):
     basic_info = {
         'state_transition_manager': bridgehub_contract.functions.stateTransitionManager(int(chain_id, 16)).call(),
         'base_token': bridgehub_contract.functions.baseToken(int(chain_id, 16)).call(),
-        'base_token_bridge': bridgehub_contract.functions.baseTokenBridge(int(chain_id, 16)).call()
+        'base_token_bridge': bridgehub_contract.functions.sharedBridge().call()
     }
 
     stm_abi = [
         {
-            "name": "stateTransition",
+            "name": "getHyperchain",
             "inputs": [
                 {
                     "type": "uint256"
@@ -242,21 +339,77 @@ def get_shared_bridge_chain_info(l1_network, bridgehub, chain_id):
     stm_contract = ethweb3.eth.contract(address=basic_info['state_transition_manager'], abi=stm_abi)
 
 
-    basic_info["state_transition"] = stm_contract.functions.stateTransition(int(chain_id, 16)).call()
+    basic_info["state_transition"] = stm_contract.functions.getHyperchain(int(chain_id, 16)).call()
 
-    # this works only for l1 weth bridge for now.
-    basic_info['balance'] = get_chain_balance_info(l1_config["l1_url"], basic_info['base_token_bridge'], chain_id)
+    st_abi = [
+        {
+            "name": "getPubdataPricingMode",
+            "inputs": [
+            ],
+            "outputs": [
+                {
+                    "type": "uint256"
+                }
+            ],
+            "type": "function"
+        },
+    ]
 
+    st_contract = ethweb3.eth.contract(address=basic_info['state_transition'], abi=st_abi)
+    basic_info['pubdata_pricing_mode'] = st_contract.functions.getPubdataPricingMode().call()
+    
+    basic_info['pubdata_pricing_mode_str'] = pricing_mode(basic_info['pubdata_pricing_mode'])
+    
 
+    basic_info['balance'] = get_chain_balance_info(l1_config["l1_url"], basic_info['base_token_bridge'], chain_id, basic_info['base_token'])
 
     return basic_info
+
+
+def pricing_mode(mode):
+    if mode == 0:
+        return "Rollup"
+    if mode == 1:
+        return "Validium"
+    
+    return f"Unknown mode {mode}"
+
+def get_l2_balance(web3):
+    l2_ether_contract_abi = [
+        {
+            "name": "totalSupply",
+            "inputs": [],
+            "outputs": [
+                {
+                    "type": "uint256"
+                }
+            ],
+            "type": "function"
+        },
+    ]
+
+    l2_ether_contract = web3.eth.contract(address=Web3.to_checksum_address("0x000000000000000000000000000000000000800a"), abi=l2_ether_contract_abi)
+    balance = l2_ether_contract.functions.totalSupply().call()
+    balance_in_ether = Web3.from_wei(balance, 'ether')
+
+    return (balance, balance_in_ether)
+
 
 
 def get_shared_bridge_chain_id_details(l1_network, l2_config, chain_name):
     config = l2_config["chains"][chain_name]
     basic_info = get_shared_bridge_chain_info(l1_network, l2_config["bridgehub"], config["chain_id"])
-    basic_info['l2_balance'] = "No RPC provided"
-    basic_info['l2_gas_price'] = "No RPC provided"
+
+
+    web3 = Web3(Web3.HTTPProvider(config["l2_url"]))
+    # Check if connected successfully
+    if not web3.is_connected():
+        print("Failed to connect to L2 node.")
+        basic_info['l2_balance'] = 0
+        basic_info['l2_gas_price'] = 0
+    else:
+        (basic_info['l2_balance'], _) = get_l2_balance(web3)
+        basic_info['l2_gas_price'] = web3.eth.gas_price
 
     l1_config = app.config["networks"][l1_network]
     ethweb3 = Web3(Web3.HTTPProvider(l1_config["l1_url"]))
@@ -281,10 +434,12 @@ def get_shared_bridge_details(l1_network, l2_network):
     ]
 
     return {
+        'l1_network': l1_network,
+        'shared_bridge_name': l2_network,
         'chain_count': len(l2_config["chains"]),
         'chains': chains,
         'explorer_prefix': l1_config['explorer_prefix'],
-        'explorer_address_prefix:': l1_config['explorer_prefix'] + "address/",
+        'explorer_address_prefix': l1_config['explorer_prefix'] + "address/",
     }
 
 

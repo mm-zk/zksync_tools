@@ -14,3 +14,15 @@ Internal details:
 * check that transaction belongs to a given block - by checking if it hashes (together with other transactions) into the block hash
 * check if the block hash is in the correct place in the merkle tree (last 257 block hashes are always persisted)
 * check if the batch is committed and proven
+
+
+## Current status
+Adding support for shared bridges.
+
+Support for blobs is not there yet.
+
+You can build a docker image via:
+
+```shell
+docker build -t hyperexplorer .
+```

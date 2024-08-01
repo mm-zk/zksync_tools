@@ -16,12 +16,12 @@ body {
 .container {
     width: 80%;
     margin: auto;
-    overflow: hidden;
+    overflow-y: hidden;
 }
 
 .small_container {
     width: 50%;
-    overflow: hidden;
+    overflow-y: hidden;
 }
 
 

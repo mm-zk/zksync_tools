@@ -29,7 +29,7 @@
             <tr>
                 <td>State Transition</td>
                 {% for chain in data.chains %}
-                <td><a href={{data.explorer_prefix +
+                <td><a href={{data.explorer_address_prefix +
                         chain.basic_info.state_transition}}>{{chain.basic_info.state_transition}}</a></td>
                 {% endfor %}
             </tr>
@@ -45,14 +45,14 @@
             <tr>
                 <td>Base token bridge</td>
                 {% for chain in data.chains %}
-                <td><a href={{data.explorer_prefix +
+                <td><a href={{data.explorer_address_prefix +
                         chain.basic_info.base_token_bridge}}>{{chain.basic_info.base_token_bridge}}</a></td>
                 {% endfor %}
             </tr>
             <tr>
                 <td>Balance on L2</td>
                 {% for chain in data.chains %}
-                <td>{{chain.basic_info.l2_balance}}</td>
+                <td>{{chain.basic_info.l2_balance | format_int}} ( {{chain.basic_info.l2_balance | format_eth}} ) </td>
                 {% endfor %}
             </tr>
             <tr>
@@ -64,9 +64,9 @@
 
             </tr>
             <tr>
-                <td>L2 gas price (Gwei)</td>
+                <td>L2 gas price (wei)</td>
                 {% for chain in data.chains %}
-                <td>{{chain.basic_info.l2_gas_price}}</td>
+                <td>{{chain.basic_info.l2_gas_price | format_int}}</td>
                 {% endfor %}
 
             </tr>
@@ -90,7 +90,9 @@
                 </td>
 
                 {% for chain in data.chains %}
-                <td>{{chain.l2.l1_batches.committed}}</td>
+                <td>{{chain.l2.l1_batches.committed}} <a
+                        href="/batch_shared/{{data.l1_network}}/{{data.shared_bridge_name}}/{{chain.name}}/{{chain.l2.l1_batches.committed}}">Info</a>
+                </td>
                 {% endfor %}
 
 
@@ -101,7 +103,10 @@
                     Verified
                 </td>
                 {% for chain in data.chains %}
-                <td>{{chain.l2.l1_batches.verified}}</td>
+                <td>{{chain.l2.l1_batches.verified}}
+                    <a
+                        href="/batch_shared/{{data.l1_network}}/{{data.shared_bridge_name}}/{{chain.name}}/{{chain.l2.l1_batches.verified}}">Info</a>
+                </td>
                 {% endfor %}
 
             </tr>
@@ -110,7 +115,10 @@
                     Executed
                 </td>
                 {% for chain in data.chains %}
-                <td>{{chain.l2.l1_batches.executed}}</td>
+                <td>{{chain.l2.l1_batches.executed}}
+                    <a
+                        href="/batch_shared/{{data.l1_network}}/{{data.shared_bridge_name}}/{{chain.name}}/{{chain.l2.l1_batches.executed}}">Info</a>
+                </td>
                 {% endfor %}
 
             </tr>
@@ -122,7 +130,7 @@
                     Protocol version
                 </td>
                 {% for chain in data.chains %}
-                <td>{{chain.l2.protocol_version}}</td>
+                <td>{{chain.l2.protocol_version | format_protocol_version}}</td>
                 {% endfor %}
 
             </tr>
