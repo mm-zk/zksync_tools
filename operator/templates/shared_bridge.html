@@ -64,7 +64,7 @@
 
             </tr>
             <tr>
-                <td>L2 gas price (Gwei)</td>
+                <td>L2 gas price (wei)</td>
                 {% for chain in data.chains %}
                 <td>{{chain.basic_info.l2_gas_price | format_int}}</td>
                 {% endfor %}
@@ -103,7 +103,10 @@
                     Verified
                 </td>
                 {% for chain in data.chains %}
-                <td>{{chain.l2.l1_batches.verified}}</td>
+                <td>{{chain.l2.l1_batches.verified}}
+                    <a
+                        href="/batch_shared/{{data.l1_network}}/{{data.shared_bridge_name}}/{{chain.name}}/{{chain.l2.l1_batches.verified}}">Info</a>
+                </td>
                 {% endfor %}
 
             </tr>
@@ -112,7 +115,10 @@
                     Executed
                 </td>
                 {% for chain in data.chains %}
-                <td>{{chain.l2.l1_batches.executed}}</td>
+                <td>{{chain.l2.l1_batches.executed}}
+                    <a
+                        href="/batch_shared/{{data.l1_network}}/{{data.shared_bridge_name}}/{{chain.name}}/{{chain.l2.l1_batches.executed}}">Info</a>
+                </td>
                 {% endfor %}
 
             </tr>
@@ -124,7 +130,7 @@
                     Protocol version
                 </td>
                 {% for chain in data.chains %}
-                <td>{{chain.l2.protocol_version}}</td>
+                <td>{{chain.l2.protocol_version | format_protocol_version}}</td>
                 {% endfor %}
 
             </tr>

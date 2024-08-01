@@ -58,6 +58,14 @@ def format_eth(value):
     
     return round(value / 10**18, 2)
 
+def format_protocol_version(value):
+    if not isinstance(value, int):
+        return value
+    # old protocols
+    if value < 25:
+        return value
+    return f"{value >> 32}.{value%(1<<32)}"
+
 def remove_leading_zeros_hex(hex_str):
     # Check if the input is a string
     if not isinstance(hex_str, str):
@@ -77,6 +85,7 @@ app.jinja_env.filters['format_int'] = format_int
 app.jinja_env.filters['format_eth'] = format_eth
 
 app.jinja_env.filters['remove_leading_zeros_hex'] = remove_leading_zeros_hex
+app.jinja_env.filters['format_protocol_version'] = format_protocol_version
 
 MEMOISE_DURATION=1
 
@@ -396,10 +405,11 @@ def get_shared_bridge_chain_id_details(l1_network, l2_config, chain_name):
     # Check if connected successfully
     if not web3.is_connected():
         print("Failed to connect to L2 node.")
-        raise
-
-    (basic_info['l2_balance'], _) = get_l2_balance(web3)
-    basic_info['l2_gas_price'] = web3.eth.gas_price
+        basic_info['l2_balance'] = 0
+        basic_info['l2_gas_price'] = 0
+    else:
+        (basic_info['l2_balance'], _) = get_l2_balance(web3)
+        basic_info['l2_gas_price'] = web3.eth.gas_price
 
     l1_config = app.config["networks"][l1_network]
     ethweb3 = Web3(Web3.HTTPProvider(l1_config["l1_url"]))
