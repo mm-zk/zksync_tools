@@ -17,8 +17,8 @@
                         },
                         "cronos": {
                             "chain_id": "0x184",
-                            "l2_url": "",
-                            "explorer": "",
+                            "l2_url": "https://mainnet.zkevm.cronos.org",
+                            "explorer": "https://explorer.zkevm.cronos.org/",
                             "type": "validium"
                         }
                     }
@@ -50,6 +50,12 @@
                             "chain_id": "0x146",
                             "l2_url": "",
                             "explorer": "",
+                            "type": "validium"
+                        },
+                        "sophon_testnet": {
+                            "chain_id": "0x1fa72e78",
+                            "l2_url": "https://rpc.testnet.sophon.xyz",
+                            "explorer": "https://explorer.testnet.sophon.xyz/",
                             "type": "validium"
                         }
                     }
