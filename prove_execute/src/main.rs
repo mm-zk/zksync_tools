@@ -1,14 +1,15 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
+use alloy::primitives::{Address, B256, U256, keccak256};
 use clap::Parser;
 
 use alloy::{
     consensus::Transaction,
     hex::FromHex,
-    primitives::{Address, TxHash, U256},
     providers::{Provider, ProviderBuilder},
+    rpc::types::Filter,
     sol,
-    sol_types::SolCall,
+    sol_types::{SolCall, SolEvent},
 };
 
 mod snark;
@@ -45,6 +46,8 @@ sol! {
             uint256 _processBatchTo,
             bytes calldata _proofData
         );
+        event BlockCommit(uint256 indexed batchNumber, bytes32 indexed batchHash, bytes32 indexed commitment);
+
     }
     #[derive(Debug)]
 
@@ -88,6 +91,57 @@ sol! {
     }
 }
 
+pub fn compute_batch_outputs_hash(batch: &CommitBoojumOSBatchInfo) -> B256 {
+    let mut bytes = Vec::with_capacity(32 + 8 + 8 + 20 + 32 + 32 + 32 + 32 + 32);
+
+    // Encode chainId as 32-byte big-endian.
+    {
+        bytes.extend_from_slice(&batch.chainId.to_be_bytes::<32>());
+    }
+    // Encode firstBlockTimestamp (uint64 - 8 bytes)
+    bytes.extend_from_slice(&batch.firstBlockTimestamp.to_be_bytes());
+    // Encode lastBlockTimestamp (uint64 - 8 bytes)
+    bytes.extend_from_slice(&batch.lastBlockTimestamp.to_be_bytes());
+    // Encode l2DaValidator as 20 bytes already.
+    bytes.extend_from_slice(batch.l2DaValidator.as_slice());
+    // Encode daCommitment (bytes32 - 32 bytes)
+    bytes.extend_from_slice(batch.daCommitment.as_slice());
+    // Encode numberOfLayer1Txs as 32-byte big-endian.
+    {
+        bytes.extend_from_slice(&batch.numberOfLayer1Txs.to_be_bytes::<32>());
+    }
+    // Encode priorityOperationsHash (bytes32 - 32 bytes)
+    bytes.extend_from_slice(batch.priorityOperationsHash.as_slice());
+    // Encode l2LogsTreeRoot (bytes32 - 32 bytes)
+    bytes.extend_from_slice(batch.l2LogsTreeRoot.as_slice());
+    // Append zero upgrade tx hash (bytes32 - 32 bytes of zero)
+    bytes.extend_from_slice(&[0u8; 32]);
+
+    // Compute and return the keccak256 hash.
+    keccak256(&bytes).into()
+}
+
+pub fn commit_to_stored(info: CommitBoojumOSBatchInfo) -> StoredBatchInfo {
+    StoredBatchInfo {
+        batchNumber: info.batchNumber,
+        batchHash: info.newStateCommitment,
+        indexRepeatedStorageChanges: 0,
+        numberOfLayer1Txs: info.numberOfLayer1Txs,
+        priorityOperationsHash: info.priorityOperationsHash,
+        l2LogsTreeRoot: info.l2LogsTreeRoot,
+        timestamp: U256::from(0), // For Boojum OS not used, 0
+        commitment: compute_batch_outputs_hash(&info), // For Boojum OS batches we'll store batch output hash here
+    }
+}
+
+pub fn get_batch_public_input(prev_batch: &StoredBatchInfo, batch: &StoredBatchInfo) -> B256 {
+    let mut bytes = Vec::with_capacity(32 * 3);
+    bytes.extend_from_slice(prev_batch.batchHash.as_slice());
+    bytes.extend_from_slice(batch.batchHash.as_slice());
+    bytes.extend_from_slice(batch.commitment.as_slice());
+    keccak256(&bytes).into()
+}
+
 #[derive(Parser)]
 #[command(version, about, long_about = None)]
 struct Cli {
@@ -95,10 +149,66 @@ struct Cli {
     address: String,
     #[arg(short, long)]
     server_url: Option<String>,
+
+    #[arg(long)]
+    start: u64,
+    #[arg(long)]
+    end: u64,
+
+    #[arg(long)]
+    snark_path: String,
+}
+
+/// Iterates backwards over blocks in chunks and prints transactions that emit the given event.
+async fn iterate_blocks_for_event<P: Provider>(
+    provider: P,
+    contract_address: alloy::primitives::Address,
+    event_topic: B256,
+    chunk_size: u64,
+    num_blocks_to_scan: Option<u64>,
+) -> Result<HashSet<B256>, Box<dyn std::error::Error>> {
+    // Get the current block number.
+    let latest_block = provider.get_block_number().await?;
+    let mut current_block = latest_block;
+    let start_block = num_blocks_to_scan
+        .map(|x| current_block.saturating_sub(x))
+        .unwrap_or(0);
+
+    let mut result: HashSet<B256> = HashSet::new();
+
+    println!(
+        "Scanning blocks from {} to {}...",
+        start_block, current_block
+    );
+    // Loop backwards until block 0.
+    while current_block > start_block {
+        let from_block = current_block.saturating_sub(chunk_size) + 1;
+
+        let filter = Filter::new()
+            .from_block(from_block)
+            .to_block(current_block)
+            .address(contract_address)
+            .event_signature(event_topic);
+
+        // Get the matching logs.
+        let logs = provider.get_logs(&filter).await?;
+        for log in logs {
+            println!(
+                "Found event in tx: {:?} at block {:?}",
+                log.transaction_hash, log.block_number
+            );
+            result.insert(log.transaction_hash.unwrap());
+        }
+
+        if from_block == 1 {
+            break;
+        }
+        current_block = from_block - 1;
+    }
+    Ok(result)
 }
 
 #[tokio::main]
-
 async fn main() {
     let args = Cli::parse();
     let server = args
@@ -113,61 +223,49 @@ async fn main() {
 
     println!("Verifier: {}", contract.getVerifier().call().await.unwrap());
 
-    let transactions = [
-        "0xdba68527f0fa45d1492c491d0ff96f901e2f319f20195218f0541c831a85e7da",
-        "0xa941c7fd5ae27c73ac420b19d2d9689d85b4ebf82b58d464eb96d5de41568ebb",
-        "0xe47363114780670144e032502a532fe0b9122495e7c5a717ab91625bf9ca629b",
-        "0x2ff28754039a48701328d77bb97ed52195eb8aad39711c86238e88bf4519d1e7",
-        // skipped - good.
-        "0xe672c197695b59cf74ac15bf4b7664a4b1892c38958354f43bb084f3261befb0",
-        // skipped - good.
-        "0xdddb319eb27f54e258ed4f8bc5d92445f55513c4957c28121d78fd07b2e9c13c",
-    ];
+    let transactions = iterate_blocks_for_event(
+        provider.clone(),
+        address,
+        IHyperchain::BlockCommit::SIGNATURE_HASH,
+        10000,
+        // scan at most 1M blocks.
+        Some(1_000_000),
+    )
+    .await
+    .unwrap();
 
     let mut batches = HashMap::new();
     let mut stored = HashMap::new();
 
-    for tx in transactions {
-        let tx_hash = TxHash::from_hex(tx).unwrap();
+    for tx_hash in transactions {
         let tx_data = provider
             .get_transaction_by_hash(tx_hash)
             .await
             .unwrap()
             .expect("Transaction not found");
 
-        let aa = tx_data.inner;
-        let bb = aa.as_eip1559().unwrap();
-        let cc = bb.tx();
+        let tx = tx_data.inner.as_eip1559().unwrap().tx();
 
-        if cc.input[..4] != IHyperchain::commitBatchesSharedBridgeCall::SELECTOR {
-            println!("Skipping transaction: {}", tx);
+        if tx.input[..4] != IHyperchain::commitBatchesSharedBridgeCall::SELECTOR {
+            println!("Skipping transaction: {}", tx_hash);
             continue;
         }
 
-        let decoded = IHyperchain::commitBatchesSharedBridgeCall::abi_decode(cc.input()).unwrap();
-        {
-            println!("First parameter: {}", decoded._0);
-            println!("Second parameter: {}", decoded._1);
-            println!("Third parameter: {}", decoded._2);
-        }
+        let decoded = IHyperchain::commitBatchesSharedBridgeCall::abi_decode(tx.input()).unwrap();
 
         let commit_data = &decoded._3.clone()[1..];
         //println!("commit data: 0x{}", hex::encode(commit_data));
         //let ww = IHyperchain::tmpStuffCall::abi_decode_raw(commit_data).unwrap();
-        println!("Looking at tx: {}", tx);
 
         let ww = IHyperchain::tmpStuffCall::abi_decode_raw(commit_data).unwrap();
         for other in ww.commits {
-            println!("CommitBoojumOSBatchInfo: {:?}", other.batchNumber);
             batches.insert(other.batchNumber, other);
         }
         stored.insert(ww.stored.batchNumber, ww.stored);
     }
-    let data = snark::parse_snark("merged_2.snark").unwrap();
-    println!("Parsed SNARK data: {:?}", data[0]);
 
-    println!("data: {:?}", data[0]);
-
+    println!("Got {} batches", batches.len());
+    let data = snark::load_snark_from_file(&args.snark_path).unwrap();
     let mut proof: Vec<U256> = data
         .iter()
         .map(|x| U256::from_str_radix(x, 10).unwrap())
@@ -175,40 +273,39 @@ async fn main() {
 
     // ohbender type
     proof.insert(0, U256::from(2));
+
+    let prev_batch = args.start - 1;
+
     // FRI from batch 1.
     proof.insert(
         1,
-        U256::from_str_radix(
-            "309f3397494dd66536462742c2661015cac60f3efffcbf11c28cdee0691cc6e9",
-            16,
+        get_batch_public_input(
+            &stored.get(&(prev_batch - 1)).unwrap(),
+            &stored.get(&prev_batch).unwrap(),
         )
-        .unwrap(),
+        .into(),
     );
 
-    let mut proofData = vec![0u8];
+    let mut proof_data = vec![0u8];
 
-    let from = 2;
-    let to = 3;
+    let new_batches = (args.start..=args.end)
+        .map(|x| commit_to_stored(batches.get(&x).unwrap().clone()))
+        .collect();
 
-    let pp = IHyperchain::proofPayloadCall {
-        old: stored.get(&1).unwrap().clone(),
-        newInfo: vec![
-            stored.get(&2).unwrap().clone(),
-            stored.get(&3).unwrap().clone(),
-        ],
+    let proof_payload = IHyperchain::proofPayloadCall {
+        old: commit_to_stored(batches.get(&prev_batch).unwrap().clone()),
+        newInfo: new_batches,
         proof,
     };
 
-    pp.abi_encode_raw(&mut proofData);
+    proof_payload.abi_encode_raw(&mut proof_data);
 
-    //;::abi_encode_raw(&self, out);
-
-    let result = contract
+    let _ = contract
         .proveBatchesSharedBridge(
             0.try_into().unwrap(),
-            2.try_into().unwrap(),
-            3.try_into().unwrap(),
-            proofData.into(),
+            args.start.try_into().unwrap(),
+            args.end.try_into().unwrap(),
+            proof_data.into(),
         )
         .call()
         .await
