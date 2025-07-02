@@ -12,7 +12,15 @@ serde_json = "1.0.67"
 crypto_codegen = { package = "zksync_solidity_vk_codegen", version = "=0.32.1" }
 circuit_definitions = "=0.152.2"
 bellman = { package = "zksync_bellman", version = "=0.32.1" }
-execution_utils = { package = "execution_utils", git = "https://github.com/matter-labs/zksync-airbender.git", tag="v0.3.1" }
-cli = { package = "cli", git = "https://github.com/matter-labs/zksync-airbender.git", tag="v0.3.1" }
 hex = "0.4"
 clap = {version = "4.2.2", features = ["derive"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+
+reqwest = { version = "0.11", features = ["json"] }
+alloy = { version = "1.0.1", features = ["full"] }
+
+execution_utils = { package = "execution_utils", git = "https://github.com/matter-labs/zksync-airbender.git", tag="v0.3.1" }
+cli = { package = "cli", git = "https://github.com/matter-labs/zksync-airbender.git", tag="v0.3.1" }
+#zkos_wrapper = { package = "zkos-wrapper", git = "https://github.com/matter-labs/zkos-wrapper.git", tag = "v0.3.1" }
+
+zkos_wrapper = { package = "zkos-wrapper", path = "../../zkos-wrapper/wrapper"}

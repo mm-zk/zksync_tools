@@ -7,3 +7,19 @@ I uses airbender 0.2.0 (and same for zkos wrapper)
 SNARK verifier hash is:
 
 0x3f0828d2239746bb61a9cee78016d3e191850c941f91eefd8af849716d06d3ea
+
+
+# CLI tool to handle FRI merging
+
+
+Can parse FRI and SNARK files (both ProgramProof json or JSON fetched from sequencer API)
+```shell
+cargo run parse-fri 1.fri
+```
+
+Can merge FRIs into a single FRI (using universal verifier).
+
+```shell
+cargo run --release merge-fri 1.fri 2.fri 3.fri 4.fri --output foo.json --tmp-dir tmp_results
+```
+
