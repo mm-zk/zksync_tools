@@ -68,7 +68,6 @@ pub async fn run_ohbender(
 
         // This is the workaround for the fact that wrapper and execution utils might be different.
         let serialized_final_proof = serde_json::to_string(&final_proof)?;
-        println!("Serialized final proof: {}", serialized_final_proof);
         let wrapper_final_proof: zkos_wrapper::ProgramProof =
             serde_json::from_str(&serialized_final_proof)?;
 

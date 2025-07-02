@@ -81,15 +81,23 @@ pub fn merge_fris(
     }
     let (metadata, _) = proof_list_and_metadata_from_program_proof(proofs[0].clone());
 
-    let mut gpu_shared_state = None;
+    //let mut gpu_shared_state = GpuSharedState::new(&get_padded_binary(UNIVERSAL_CIRCUIT_VERIFIER));
+    //let mut gpu_shared_state
 
     let mut result = proofs.first().ok_or("No proofs provided")?.clone();
     for (id, next) in proofs.iter().skip(1).enumerate() {
         println!("Merging proof {} of {}", id + 1, proofs.len());
         let first_oracle = proof_to_recursion_oracle(&result);
         let next_oracle = proof_to_recursion_oracle(next);
+
         // Merge each oracle with the first one.
-        result = merge_two(first_oracle, next_oracle, &metadata, &mut gpu_shared_state);
+        result = merge_two(
+            first_oracle,
+            next_oracle,
+            &metadata,
+            //      &mut Some(&mut gpu_shared_state),
+            &mut None,
+        );
         if let Some(tmp_dir) = &tmp_dir {
             let intermediate_output = format!("{}/merged_{}.json", tmp_dir, id + 1);
             let json_output = serde_json::to_string_pretty(&result)?;

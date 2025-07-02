@@ -1,6 +1,9 @@
 use std::collections::{HashMap, HashSet};
 
-use alloy::primitives::{Address, B256, U256, keccak256};
+use alloy::{
+    primitives::{Address, B256, U256, keccak256},
+    signers::local::PrivateKeySigner,
+};
 use clap::Parser;
 
 use alloy::{
@@ -157,6 +160,9 @@ struct Cli {
 
     #[arg(long)]
     snark_path: String,
+
+    #[arg(long)]
+    private_key: Option<String>,
 }
 
 /// Iterates backwards over blocks in chunks and prints transactions that emit the given event.
@@ -259,7 +265,8 @@ async fn main() {
 
         let ww = IHyperchain::tmpStuffCall::abi_decode_raw(commit_data).unwrap();
         for other in ww.commits {
-            batches.insert(other.batchNumber, other);
+            batches.insert(other.batchNumber.clone(), other.clone());
+            stored.insert(other.batchNumber, commit_to_stored(other));
         }
         stored.insert(ww.stored.batchNumber, ww.stored);
     }
@@ -279,21 +286,22 @@ async fn main() {
     // FRI from batch 1.
     proof.insert(
         1,
-        get_batch_public_input(
+        U256::from(0),
+        /*get_batch_public_input(
             &stored.get(&(prev_batch - 1)).unwrap(),
             &stored.get(&prev_batch).unwrap(),
         )
-        .into(),
+        .into(),*/
     );
 
     let mut proof_data = vec![0u8];
 
     let new_batches = (args.start..=args.end)
-        .map(|x| commit_to_stored(batches.get(&x).unwrap().clone()))
+        .map(|x| stored.get(&x).unwrap().clone())
         .collect();
 
     let proof_payload = IHyperchain::proofPayloadCall {
-        old: commit_to_stored(batches.get(&prev_batch).unwrap().clone()),
+        old: stored.get(&prev_batch).unwrap().clone(),
         newInfo: new_batches,
         proof,
     };
@@ -305,9 +313,39 @@ async fn main() {
             0.try_into().unwrap(),
             args.start.try_into().unwrap(),
             args.end.try_into().unwrap(),
-            proof_data.into(),
+            proof_data.clone().into(),
         )
         .call()
         .await
         .unwrap();
+
+    if let Some(private_key) = args.private_key {
+        let signer: PrivateKeySigner = private_key.parse().unwrap();
+        let provider = ProviderBuilder::new()
+            .wallet(signer)
+            .connect(&server)
+            .await
+            .unwrap();
+        let contract = IHyperchain::new(address, provider.clone());
+
+        let tx = contract
+            .proveBatchesSharedBridge(
+                0.try_into().unwrap(),
+                args.start.try_into().unwrap(),
+                args.end.try_into().unwrap(),
+                proof_data.into(),
+            )
+            .max_priority_fee_per_gas(2_000_000_002)
+            .max_fee_per_gas(2_000_000_002)
+            .send()
+            .await
+            .unwrap();
+        println!("Transaction sent: {}", tx.tx_hash());
+        let receipt = tx.get_receipt().await.unwrap();
+        if receipt.status() {
+            println!("Transaction succeeded: {:?}", receipt);
+        } else {
+            println!("Transaction failed: {:?}", receipt);
+        }
+    }
 }
