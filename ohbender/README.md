@@ -23,3 +23,28 @@ Can merge FRIs into a single FRI (using universal verifier).
 cargo run --release merge-fri 1.fri 2.fri 3.fri 4.fri --output foo.json --tmp-dir tmp_results
 ```
 
+
+# Running ohbender
+
+* checkout zksync-era (zksync-os-integration branch)  - suggested commit 193db617bc83d283d197200cf0693389be45335d
+
+* Run the sequencer (zkstack ecosystem init + server) - more details in the zksync era README
+
+* Run the FRI prover from zksync-era
+
+And now - instead of running the SNARK wrapper from zksync era (which would SNARK wrap every block):
+
+```shell
+cargo run --release --features gpu -- run --binary ../../zksync-era/execution_environment/app.bin --output /tmp/runner --l1-rpc http://localhost:8545 --sequencer-rpc http://localhost:3053 --sequencer-prover-api http://localhost:3124
+```
+
+This will talk to sequencer, get bridgehub info, talk to L1 - figure out all the blocks that are not proven, fetch them from sequencer, FRI-merge them,
+then SNARK wrap the final thing - and send it (currently only 'call') to L1.
+If the whole run is successful, it means that the final 'call' was with proper proof.
+
+Things to add:
+* run in a loop
+* send a transaction (instead of just a 'call')
+* also call 'execute blocks'
+* iterate over a list of chains
+* get FRI from some 'common' place instead of having to talk to sequencer.
