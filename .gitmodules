@@ -1,3 +1,6 @@
 [submodule "ohbender/contract/lib/forge-std"]
 	path = ohbender/contract/lib/forge-std
 	url = https://github.com/foundry-rs/forge-std
+[submodule "experiment_4337/contracts/lib/forge-std"]
+	path = experiment_4337/contracts/lib/forge-std
+	url = https://github.com/foundry-rs/forge-std
