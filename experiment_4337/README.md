@@ -76,3 +76,60 @@ And finally check the balance:
 cast balance $NEW_ACC 
 # should be > 0
 ```
+
+
+## Now on zkos 
+
+in account abstraction repo in hardhat.config.ts:
+add to HardhatUserConfig as a new network
+```
+    zksyncos: { 
+      url: 'http://localhost:3050',
+      accounts: ['0x7726827caac94a7f9e1b160f7ea819f172f7b6f9d2a97f992c38edeab82d4110']
+
+    },
+```
+then run:
+```
+yarn hardhat deploy --network zksyncos
+```
+
+
+
+```
+forge create -r http://localhost:3050 src/DummyAccount.sol:DummyAccount --private-key 0x7726827caac94a7f9e1b160f7ea819f172f7b6f9d2a97f992c38edeab82d4110 --constructor-args 0x4337084D9E255Ff0702461CF8895CE9E3b5Ff108
+
+# Deployed to: 0xf1Ebfaa992854ECcB01Ac1F60e5b5279095cca7F
+DUMMY=0xf1Ebfaa992854ECcB01Ac1F60e5b5279095cca7F
+```
+
+```
+cast send -r http://localhost:3050 $DUMMY --value 1ether --private-key 0x7726827caac94a7f9e1b160f7ea819f172f7b6f9d2a97f992c38edeab82d4110
+cast balance -r http://localhost:3050 $DUMMY
+cast send -r http://localhost:3050 $ENTRYPOINT "depositTo(address)" $DUMMY --value 1ether --private-key 0x7726827caac94a7f9e1b160f7ea819f172f7b6f9d2a97f992c38edeab82d4110
+cast call -r http://localhost:3050 $ENTRYPOINT "getDepositInfo(address)(uint256,bool,uint112,uint32,uint48)" $DUMMY
+```
+
+
+```
+ENTRYPOINT=0x4337084D9E255Ff0702461CF8895CE9E3b5Ff108
+CALLDATA=`cast calldata "execute(address,uint256,bytes)" $NEW_ACC 1000000 0x`
+
+GAS_FEES=0x000000000000000000000000040be400000000000000000000000000040be400
+
+ACCOUNT_GAS_LIMITS=0x0000000000000000000000001f000100000000000000000000000000001f0000
+
+
+cast send -r http://localhost:3050 $ENTRYPOINT \
+  "handleOps((address,uint256,bytes,bytes,bytes32,uint256,bytes32,bytes,bytes)[],address)" \
+"[($DUMMY,0x0,0x,$CALLDATA,$ACCOUNT_GAS_LIMITS,0x1f0000,$GAS_FEES,0x,0x01)]" \
+  $ENTRYPOINT \
+  --private-key 0x7726827caac94a7f9e1b160f7ea819f172f7b6f9d2a97f992c38edeab82d4110
+
+```
+
+
+```
+cast balance -r http://localhost:3050 $NEW_ACC 
+# should be > 0
+```
