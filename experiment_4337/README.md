@@ -103,7 +103,10 @@ forge create -r http://localhost:3050 src/DummyAccount.sol:DummyAccount --privat
 DUMMY=0xf1Ebfaa992854ECcB01Ac1F60e5b5279095cca7F
 ```
 
+
 ```
+ENTRYPOINT=0x4337084D9E255Ff0702461CF8895CE9E3b5Ff108
+
 cast send -r http://localhost:3050 $DUMMY --value 1ether --private-key 0x7726827caac94a7f9e1b160f7ea819f172f7b6f9d2a97f992c38edeab82d4110
 cast balance -r http://localhost:3050 $DUMMY
 cast send -r http://localhost:3050 $ENTRYPOINT "depositTo(address)" $DUMMY --value 1ether --private-key 0x7726827caac94a7f9e1b160f7ea819f172f7b6f9d2a97f992c38edeab82d4110
@@ -112,7 +115,7 @@ cast call -r http://localhost:3050 $ENTRYPOINT "getDepositInfo(address)(uint256,
 
 
 ```
-ENTRYPOINT=0x4337084D9E255Ff0702461CF8895CE9E3b5Ff108
+NEW_ACC=0x44861657490dF37CF1f9b2e1CA8404F9684BC852
 CALLDATA=`cast calldata "execute(address,uint256,bytes)" $NEW_ACC 1000000 0x`
 
 GAS_FEES=0x000000000000000000000000040be400000000000000000000000000040be400
@@ -125,8 +128,10 @@ cast send -r http://localhost:3050 $ENTRYPOINT \
 "[($DUMMY,0x0,0x,$CALLDATA,$ACCOUNT_GAS_LIMITS,0x1f0000,$GAS_FEES,0x,0x01)]" \
   $ENTRYPOINT \
   --private-key 0x7726827caac94a7f9e1b160f7ea819f172f7b6f9d2a97f992c38edeab82d4110
-
+  --gas-limit 10000000
 ```
+
+WARNING: currently we have to specify manual gas limit - as it seems that esimation doesn't work.
 
 
 ```
