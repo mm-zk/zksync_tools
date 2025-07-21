@@ -139,6 +139,18 @@ pub fn parse_fri(path: &str, output: Option<String>) -> Result<(), Box<dyn Error
             println!("Register {}: Not found", i);
         }
     }
+
+    // VERIFICATION KEY REGISTERS (18-25)
+    println!("Verification Key Registers (18-25):");
+    for i in 18..=25 {
+        if let Some(register) = inner_value.register_final_values.get(i) {
+            let hex_value = hex::encode(&register.value.to_le_bytes());
+            println!("Register {}: {:?} (hex: {})", i, register.value, hex_value);
+        } else {
+            println!("Register {}: Not found", i);
+        }
+    }
+
     // And now concatenated (without 17)
     let mut concatenated = String::new();
     for i in 10..=16 {

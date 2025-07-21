@@ -81,8 +81,7 @@ pub fn merge_fris(
     }
     let (metadata, _) = proof_list_and_metadata_from_program_proof(proofs[0].clone());
 
-    //let mut gpu_shared_state = GpuSharedState::new(&get_padded_binary(UNIVERSAL_CIRCUIT_VERIFIER));
-    //let mut gpu_shared_state
+    let mut gpu_shared_state = GpuSharedState::new(&get_padded_binary(UNIVERSAL_CIRCUIT_VERIFIER));
 
     let mut result = proofs.first().ok_or("No proofs provided")?.clone();
     for (id, next) in proofs.iter().skip(1).enumerate() {
@@ -95,8 +94,8 @@ pub fn merge_fris(
             first_oracle,
             next_oracle,
             &metadata,
-            //      &mut Some(&mut gpu_shared_state),
-            &mut None,
+            &mut Some(&mut gpu_shared_state),
+            // &mut None,
         );
         if let Some(tmp_dir) = &tmp_dir {
             let intermediate_output = format!("{}/merged_{}.json", tmp_dir, id + 1);

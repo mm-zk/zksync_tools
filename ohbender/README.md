@@ -20,7 +20,7 @@ cargo run parse-fri 1.fri
 Can merge FRIs into a single FRI (using universal verifier).
 
 ```shell
-cargo run --release merge-fri 1.fri 2.fri 3.fri 4.fri --output foo.json --tmp-dir tmp_results
+cargo run --release --features gpu merge-fri 1.fri 2.fri 3.fri 4.fri --output foo.json --tmp-dir tmp_results
 ```
 
 
