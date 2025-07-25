@@ -1,18 +1,10 @@
 // Things related to the L1 message merkle tree.
 // This code is not optimized, and some pieces are copied from the mini_merkle_tree crate from zksync-era.
+// For production use - please use mini_merkle_tree.
 
-use std::{
-    collections::{HashMap, VecDeque},
-    hash::Hash,
-};
+use std::collections::{HashMap, VecDeque};
 
-use alloy::{
-    hex::FromHex,
-    primitives::{Address, B256},
-    providers::ProviderBuilder,
-};
-
-use crate::IHyperchain;
+use alloy::primitives::B256;
 
 pub struct MerkleInfoForExecute {
     last_block_number: u64,
@@ -23,8 +15,6 @@ pub struct MerkleInfoForExecute {
 
 impl MerkleInfoForExecute {
     pub fn init(l1_txs: &HashMap<u64, Vec<B256>>) -> Self {
-        dbg!(hash_bytes(&[]));
-
         let mut merkle_info = MerkleInfoForExecute {
             last_block_number: 0,
             current_size: 0,
@@ -55,16 +45,14 @@ impl MerkleInfoForExecute {
         }
         self.current_size += l1_txs.len() as u64;
 
-        println!(
-            "XXX: block: {}, range: {} {}",
-            block_number, size_before, self.current_size
-        );
-
         self.block_range
             .insert(block_number, (size_before, self.current_size));
     }
 
-    pub fn get_merkle_path_for_l1_tx_in_block(&self, block_number: u64) -> (Vec<B256>, Vec<B256>) {
+    pub fn get_merkle_path_for_l1_tx_in_block(
+        &self,
+        block_number: u64,
+    ) -> (B256, Vec<B256>, Vec<B256>) {
         let range = self
             .block_range
             .get(&block_number)
@@ -73,16 +61,12 @@ impl MerkleInfoForExecute {
         let mut right_path = vec![];
 
         self.merkle_tree
-            .compute_merkle_root_and_path(range.0 as usize, Some(&mut left_path), None);
-        let root = self.merkle_tree.compute_merkle_root_and_path(
-            (range.1 - 1) as usize,
-            Some(&mut right_path),
-            None,
-        );
-
-        dbg!(root);
-
+            .compute_merkle_root_and_path(range.0 as usize, Some(&mut left_path));
+        let root = self
+            .merkle_tree
+            .compute_merkle_root_and_path((range.1 - 1) as usize, Some(&mut right_path));
         (
+            root,
             left_path.iter().map(|x| x.unwrap()).collect(),
             right_path.iter().map(|x| x.unwrap()).collect(),
         )
@@ -138,7 +122,6 @@ impl MiniMerkleTree {
         &self,
         mut index: usize,
         mut path: Option<&mut Vec<Option<B256>>>,
-        side: Option<Side>,
     ) -> B256 {
         let depth = Self::tree_depth_by_size(self.binary_tree_size);
         if let Some(path) = path.as_deref_mut() {
@@ -162,11 +145,8 @@ impl MiniMerkleTree {
                 hashes.push_back(empty_subtree_hash(level));
             }
             if let Some(path) = path.as_deref_mut() {
-                let hash = match side {
-                    Some(Side::Left) if index % 2 == 0 => None,
-                    Some(Side::Right) if index % 2 == 1 => None,
-                    _ => hashes.get(index ^ 1).copied(),
-                };
+                let hash = hashes.get(index ^ 1).copied();
+
                 path.push(hash);
             }
 
@@ -183,12 +163,6 @@ impl MiniMerkleTree {
 
         hashes[0]
     }
-}
-
-#[derive(Debug, Clone, Copy)]
-enum Side {
-    Left,
-    Right,
 }
 
 fn hash_bytes(value: &[u8]) -> B256 {
@@ -224,7 +198,6 @@ fn empty_subtree_hash(depth: usize) -> B256 {
     compute_empty_tree_hashes(empty_leaf_hash())[depth]
 }
 
-// TODO: Check if not 88
 fn empty_leaf_hash() -> B256 {
     hash_bytes(&[])
 }
