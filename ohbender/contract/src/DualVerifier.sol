@@ -46,6 +46,11 @@ error UnknownVerifierType();
 // 0x456f8f7a
 error EmptyProofLength();
 
+// 0xd08a97e6
+error InvalidMockProofLength();
+// 0x09bde339
+error InvalidProof();
+
 /// @title Dual Verifier
 /// @author Matter Labs
 /// @custom:security-contact security@matterlabs.dev
@@ -67,6 +72,9 @@ contract DualVerifier is IVerifier {
     uint256 internal constant PLONK_VERIFICATION_TYPE = 1;
 
     uint256 internal constant OHBENDER_PLONK_VERIFICATION_TYPE = 2;
+
+    // @notice Code must be removed before prod.
+    uint256 internal constant OHBENDER_MOCK_VERIFICATION_TYPE = 3;
 
     /// @param _fflonkVerifier The address of the FFLONK verifier contract.
     /// @param _plonkVerifier The address of the PLONK verifier contract.
@@ -100,16 +108,39 @@ contract DualVerifier is IVerifier {
             return PLONK_VERIFIER.verify(_publicInputs, _extractProof(_proof));
         } else if (verifierType == OHBENDER_PLONK_VERIFICATION_TYPE) {
             uint256[] memory args = new uint256[](1);
-            args[0] = computeOhBenderHash(_proof[1], _publicInputs) >> 32;
+            args[0] = computeOhBenderHash(_proof[1], _publicInputs);
 
             console.logBytes32(bytes32(args[0]));
 
             return PLONK_VERIFIER.verify(args, _extractOhBenderProof(_proof));
+        } else if (verifierType == OHBENDER_MOCK_VERIFICATION_TYPE) {
+            uint256[] memory args = new uint256[](1);
+            args[0] = computeOhBenderHash(_proof[1], _publicInputs);
+
+            console.logBytes32(bytes32(args[0]));
+
+            return mockverify(args, _extractOhBenderProof(_proof));
         }
         // If the verifier type is unknown, revert with an error.
         else {
             revert UnknownVerifierType();
         }
+    }
+
+    function mockverify(
+        uint256[] memory _publicInputs,
+        uint256[] memory _proof
+    ) public view virtual returns (bool) {
+        if (_proof.length != 2) {
+            revert InvalidMockProofLength();
+        }
+        if (_proof[0] != 13) {
+            revert InvalidProof();
+        }
+        if (_proof[1] != _publicInputs[0]) {
+            revert InvalidProof();
+        }
+        return true;
     }
 
     /// @inheritdoc IVerifier

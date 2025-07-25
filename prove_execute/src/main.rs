@@ -4,7 +4,7 @@ use alloy::{
     primitives::{Address, B256, U256, keccak256},
     signers::local::PrivateKeySigner,
 };
-use clap::Parser;
+use clap::{Parser, Subcommand};
 
 use alloy::{
     consensus::Transaction,
@@ -15,6 +15,14 @@ use alloy::{
     sol_types::{SolCall, SolEvent},
 };
 
+use crate::{
+    execute::execute_batches,
+    prove::{fake_prove_batches, prove_batches},
+};
+
+mod execute;
+mod l1_merkle;
+mod prove;
 mod snark;
 
 sol! {
@@ -43,12 +51,29 @@ sol! {
 
         function proofPayload(StoredBatchInfo old, StoredBatchInfo[] newInfo, uint256[] proof);
 
+        struct PriorityOpsBatchInfo {
+            bytes32[] leftPath;
+            bytes32[] rightPath;
+            bytes32[] itemHashes;
+        }
+
+        function executePayload(StoredBatchInfo[] executeData, PriorityOpsBatchInfo[] priorityOps);
+
+
         function proveBatchesSharedBridge(
             uint256, // _chainId
             uint256 _processBatchFrom,
             uint256 _processBatchTo,
             bytes calldata _proofData
         );
+
+        function executeBatchesSharedBridge(
+            uint256, // _chainId
+            uint256 _processFrom,
+            uint256 _processTo,
+            bytes calldata _executeData
+        );
+
         event BlockCommit(uint256 indexed batchNumber, bytes32 indexed batchHash, bytes32 indexed commitment);
 
     }
@@ -145,21 +170,109 @@ pub fn get_batch_public_input(prev_batch: &StoredBatchInfo, batch: &StoredBatchI
     keccak256(&bytes).into()
 }
 
-#[derive(Parser)]
-#[command(version, about, long_about = None)]
-struct Cli {
-    #[arg(short, long)]
-    address: String,
-    #[arg(short, long)]
-    server_url: Option<String>,
+pub fn shift_b256_right(input: &B256) -> B256 {
+    let mut bytes = [0_u8; 32];
+    bytes[4..32].copy_from_slice(&input.as_slice()[0..28]);
+    B256::from_slice(&bytes)
+}
 
+pub fn snark_public_input_for_range(
+    batches: &HashMap<u64, StoredBatchInfo>,
+    start: u64,
+    end: u64,
+) -> B256 {
+    let mut result: Option<B256> = None;
+    for i in start..=end {
+        let batch = batches.get(&i).expect("Batch not found");
+        let prev_batch = batches.get(&(i - 1)).expect("Previous batch not found");
+        let public_input = get_batch_public_input(prev_batch, batch);
+        // Snark public input is public_input >> 32.
+        let snark_input = shift_b256_right(&public_input);
+
+        match result {
+            Some(ref mut res) => {
+                // Combine with previous result.
+                let mut combined = [0_u8; 64];
+                combined[..32].copy_from_slice(&res.0);
+                combined[32..].copy_from_slice(&snark_input.0);
+                *res = shift_b256_right(&keccak256(&combined));
+            }
+            None => {
+                result = Some(snark_input);
+            }
+        }
+    }
+    result.unwrap()
+}
+
+#[derive(Debug, Parser, Clone)]
+
+struct ArgsRange {
     #[arg(long)]
     start: u64,
     #[arg(long)]
     end: u64,
+}
 
-    #[arg(long)]
-    snark_path: String,
+#[derive(Debug, Subcommand)]
+enum Command {
+    /// Shows the current status.
+    Show {},
+    /// Computes public input for given batch range.
+    PublicInput {
+        #[clap(flatten)]
+        range: ArgsRange,
+    },
+    /// Figures out the non-proven or executed batches, and uses fake prover to prove & execute them.
+    FakeProveAndExecute {
+        #[arg(long)]
+        /// Address of the L2 sequencer to use for execution.
+        /// If not specified, it will use the local one.
+        l2_sequencer: Option<String>,
+    },
+    /// Takes existing SNARK proof and submits it to the contract.
+    Prove {
+        /// Path to the file with SNARK proof.
+        #[arg(long)]
+        snark_path: String,
+        #[clap(flatten)]
+        range: ArgsRange,
+
+        /// If specified, the SNARK proof starts from this batch, rather than from
+        /// range.start (useful if some other small proof was already submitted).
+        #[arg(long)]
+        snark_start: Option<u64>,
+    },
+    /// Will use a 'fake verifier' (if supported) - this way it doesn't have to spend time creating snark proof.
+    FakeProve {
+        /// Public input that shoudl be passed to the contract.
+        #[arg(long)]
+        public_input: String,
+        #[clap(flatten)]
+        range: ArgsRange,
+    },
+    /// Executes given range of blocks (this is the final step in the process).
+    Execute {
+        #[clap(flatten)]
+        range: ArgsRange,
+
+        #[arg(long)]
+        /// Address of the L2 sequencer to use for execution.
+        /// If not specified, it will use the local one.
+        l2_sequencer: Option<String>,
+    },
+}
+
+#[derive(Parser)]
+#[command(version, about, long_about = None)]
+struct Cli {
+    #[command(subcommand)]
+    command: Command,
+
+    #[arg(short, long)]
+    address: String,
+    #[arg(short, long)]
+    server_url: Option<String>,
 
     #[arg(long)]
     private_key: Option<String>,
@@ -214,24 +327,17 @@ async fn iterate_blocks_for_event<P: Provider>(
     Ok(result)
 }
 
-#[tokio::main]
-async fn main() {
-    let args = Cli::parse();
-    let server = args
-        .server_url
-        .unwrap_or_else(|| "http://localhost:8545".to_string());
-    println!("Diamond Proxy: {}", args.address);
-    let provider = ProviderBuilder::new().connect(&server).await.unwrap();
-
-    let address = Address::from_hex(args.address).unwrap();
-
-    let contract = IHyperchain::new(address, provider.clone());
-
-    println!("Verifier: {}", contract.getVerifier().call().await.unwrap());
-
+/// Fetch batches that were sent in 'commit' transactions.
+pub async fn fetch_batches<P: Provider + Clone>(
+    provider: P,
+    diamond_proxy_address: alloy::primitives::Address,
+) -> (
+    HashMap<u64, CommitBoojumOSBatchInfo>,
+    HashMap<u64, StoredBatchInfo>,
+) {
     let transactions = iterate_blocks_for_event(
         provider.clone(),
-        address,
+        diamond_proxy_address,
         IHyperchain::BlockCommit::SIGNATURE_HASH,
         10000,
         // scan at most 1M blocks.
@@ -260,8 +366,6 @@ async fn main() {
         let decoded = IHyperchain::commitBatchesSharedBridgeCall::abi_decode(tx.input()).unwrap();
 
         let commit_data = &decoded._3.clone()[1..];
-        //println!("commit data: 0x{}", hex::encode(commit_data));
-        //let ww = IHyperchain::tmpStuffCall::abi_decode_raw(commit_data).unwrap();
 
         let ww = IHyperchain::tmpStuffCall::abi_decode_raw(commit_data).unwrap();
         for other in ww.commits {
@@ -270,82 +374,202 @@ async fn main() {
         }
         stored.insert(ww.stored.batchNumber, ww.stored);
     }
+    (batches, stored)
+}
 
-    println!("Got {} batches", batches.len());
-    let data = snark::load_snark_from_file(&args.snark_path).unwrap();
-    let mut proof: Vec<U256> = data
-        .iter()
-        .map(|x| U256::from_str_radix(x, 10).unwrap())
-        .collect();
+#[tokio::main]
+async fn main() {
+    let args = Cli::parse();
+    let server = args
+        .server_url
+        .clone()
+        .unwrap_or_else(|| "http://localhost:8545".to_string());
 
-    // ohbender type
-    proof.insert(0, U256::from(2));
-
-    let prev_batch = args.start - 1;
-
-    // FRI from batch 1.
-    proof.insert(
-        1,
-        U256::from(0),
-        /*get_batch_public_input(
-            &stored.get(&(prev_batch - 1)).unwrap(),
-            &stored.get(&prev_batch).unwrap(),
-        )
-        .into(),*/
-    );
-
-    let mut proof_data = vec![0u8];
-
-    let new_batches = (args.start..=args.end)
-        .map(|x| stored.get(&x).unwrap().clone())
-        .collect();
-
-    let proof_payload = IHyperchain::proofPayloadCall {
-        old: stored.get(&prev_batch).unwrap().clone(),
-        newInfo: new_batches,
-        proof,
+    let signer = if let Some(private_key) = args.private_key.clone() {
+        let signer: PrivateKeySigner = private_key.parse().unwrap();
+        signer
+    } else {
+        PrivateKeySigner::random()
     };
 
-    proof_payload.abi_encode_raw(&mut proof_data);
+    let dry_run = args.private_key.is_none();
 
-    let _ = contract
-        .proveBatchesSharedBridge(
-            0.try_into().unwrap(),
-            args.start.try_into().unwrap(),
-            args.end.try_into().unwrap(),
-            proof_data.clone().into(),
-        )
-        .call()
+    let provider = ProviderBuilder::new()
+        .wallet(signer)
+        .connect(&server)
         .await
         .unwrap();
 
-    if let Some(private_key) = args.private_key {
-        let signer: PrivateKeySigner = private_key.parse().unwrap();
-        let provider = ProviderBuilder::new()
-            .wallet(signer)
-            .connect(&server)
-            .await
-            .unwrap();
-        let contract = IHyperchain::new(address, provider.clone());
+    let address = Address::from_hex(args.address.clone()).unwrap();
 
-        let tx = contract
-            .proveBatchesSharedBridge(
-                0.try_into().unwrap(),
-                args.start.try_into().unwrap(),
-                args.end.try_into().unwrap(),
-                proof_data.into(),
-            )
-            .max_priority_fee_per_gas(2_000_000_002)
-            .max_fee_per_gas(2_000_000_002)
-            .send()
-            .await
-            .unwrap();
-        println!("Transaction sent: {}", tx.tx_hash());
-        let receipt = tx.get_receipt().await.unwrap();
-        if receipt.status() {
-            println!("Transaction succeeded: {:?}", receipt);
-        } else {
-            println!("Transaction failed: {:?}", receipt);
+    let contract = IHyperchain::new(address, provider.clone());
+
+    let (batches, stored) = fetch_batches(provider.clone(), address).await;
+
+    match args.command {
+        Command::Show {} => {
+            let total_committed = contract.getTotalBatchesCommitted().call().await.unwrap();
+            let total_verified = contract.getTotalBatchesVerified().call().await.unwrap();
+            let total_executed = contract.getTotalBatchesExecuted().call().await.unwrap();
+            let semver = contract.getSemverProtocolVersion().call().await.unwrap();
+            println!("Using diamond Proxy: {}", args.address);
+            println!(
+                "Using Verifier: {}",
+                contract.getVerifier().call().await.unwrap()
+            );
+            println!("Total batches committed: {}", total_committed);
+            println!("Total batches verified: {}", total_verified);
+            println!("Total batches executed: {}", total_executed);
+            println!("Batches recovered from sequencer: {}", batches.len());
+
+            println!(
+                "Protocol version: {}.{}.{}",
+                semver._0, semver._1, semver._2
+            );
         }
-    }
+        Command::PublicInput { range } => {
+            let start = range.start;
+            let end = range.end;
+
+            if start > end {
+                panic!("Start must be less than or equal to end");
+            }
+
+            for i in start..=end {
+                let batch = stored.get(&i).expect("Batch not found");
+                let prev_batch = stored.get(&(i - 1)).expect("Previous batch not found");
+                let public_input = get_batch_public_input(prev_batch, batch);
+                let snark_public_input = shift_b256_right(&public_input);
+                println!("FRI Public input for batch {}: {}", i, public_input);
+                println!("SNARK Public input for batch {}: {}", i, snark_public_input);
+            }
+            println!(
+                "Snark public input for range {}-{}: {}",
+                start,
+                end,
+                snark_public_input_for_range(&stored, start, end)
+            );
+        }
+        Command::Prove {
+            snark_path,
+            range,
+            snark_start,
+        } => {
+            prove_batches(
+                contract,
+                range.start,
+                range.end,
+                &stored,
+                snark_start,
+                snark_path,
+                dry_run,
+            )
+            .await
+        }
+        Command::FakeProve {
+            public_input,
+            range,
+        } => {
+            fake_prove_batches(
+                contract,
+                range.start,
+                range.end,
+                &stored,
+                public_input,
+                dry_run,
+            )
+            .await
+        }
+        Command::Execute {
+            range,
+            l2_sequencer,
+        } => {
+            let l2_sequencer = l2_sequencer.unwrap_or_else(|| match args.server_url {
+                Some(_) => panic!("You set --server-url, so you must specify --l2-sequencer"),
+                None => "http://localhost:3050".to_string(),
+            });
+            execute_batches(
+                contract,
+                range.start,
+                range.end,
+                &l2_sequencer,
+                &stored,
+                dry_run,
+            )
+            .await;
+        }
+        Command::FakeProveAndExecute { l2_sequencer } => {
+            let l2_sequencer = l2_sequencer.unwrap_or_else(|| match args.server_url {
+                Some(_) => panic!("You set --server-url, so you must specify --l2-sequencer"),
+                None => "http://localhost:3050".to_string(),
+            });
+            if dry_run {
+                panic!("please provide --private-key to run this command");
+            }
+
+            let total_committed = contract
+                .getTotalBatchesCommitted()
+                .call()
+                .await
+                .unwrap()
+                .try_into()
+                .unwrap();
+            let total_verified: u64 = contract
+                .getTotalBatchesVerified()
+                .call()
+                .await
+                .unwrap()
+                .try_into()
+                .unwrap();
+            let total_executed: u64 = contract
+                .getTotalBatchesExecuted()
+                .call()
+                .await
+                .unwrap()
+                .try_into()
+                .unwrap();
+
+            if total_committed != total_verified {
+                println!(
+                    "Fake proving from {} to {}",
+                    total_verified + 1,
+                    total_committed
+                );
+                let public_input =
+                    snark_public_input_for_range(&stored, total_verified + 1, total_committed);
+                fake_prove_batches(
+                    contract.clone(),
+                    total_verified + 1,
+                    total_committed,
+                    &stored,
+                    public_input.to_string(),
+                    dry_run,
+                )
+                .await;
+            }
+
+            if total_executed != total_committed {
+                println!(
+                    "Executing from {} to {}",
+                    total_executed + 1,
+                    total_committed
+                );
+                execute_batches(
+                    contract,
+                    total_executed + 1,
+                    total_committed,
+                    &l2_sequencer,
+                    &stored,
+                    dry_run,
+                )
+                .await;
+                println!(
+                    "\x1b[32mAll batches (up to batch {}) proven and executed\x1b[0m",
+                    total_committed
+                );
+            } else {
+                println!("Nothing to execute, all batches are executed already");
+            }
+        }
+    };
 }
