@@ -1,10 +1,12 @@
 use std::collections::{HashMap, HashSet};
 
 use alloy::{
-    primitives::{Address, B256, U256, keccak256},
+    primitives::{Address, B256, FixedBytes, U256, keccak256},
     signers::local::PrivateKeySigner,
 };
 use clap::Parser;
+use reqwest::Client;
+use serde_json::Value;
 
 use alloy::{
     consensus::Transaction,
@@ -15,6 +17,9 @@ use alloy::{
     sol_types::{SolCall, SolEvent},
 };
 
+use crate::l1_merkle::MerkleInfoForExecute;
+
+mod l1_merkle;
 mod snark;
 
 sol! {
@@ -43,12 +48,29 @@ sol! {
 
         function proofPayload(StoredBatchInfo old, StoredBatchInfo[] newInfo, uint256[] proof);
 
+        struct PriorityOpsBatchInfo {
+            bytes32[] leftPath;
+            bytes32[] rightPath;
+            bytes32[] itemHashes;
+        }
+
+        function executePayload(StoredBatchInfo[] executeData, PriorityOpsBatchInfo[] priorityOps);
+
+
         function proveBatchesSharedBridge(
             uint256, // _chainId
             uint256 _processBatchFrom,
             uint256 _processBatchTo,
             bytes calldata _proofData
         );
+
+        function executeBatchesSharedBridge(
+            uint256, // _chainId
+            uint256 _processFrom,
+            uint256 _processTo,
+            bytes calldata _executeData
+        );
+
         event BlockCommit(uint256 indexed batchNumber, bytes32 indexed batchHash, bytes32 indexed commitment);
 
     }
@@ -159,7 +181,11 @@ struct Cli {
     end: u64,
 
     #[arg(long)]
-    snark_path: String,
+    snark_path: Option<String>,
+
+    // If only this is set - will use 'fake' proof.
+    #[arg(long)]
+    public_input: Option<String>,
 
     #[arg(long)]
     private_key: Option<String>,
@@ -221,9 +247,10 @@ async fn main() {
         .server_url
         .unwrap_or_else(|| "http://localhost:8545".to_string());
     println!("Diamond Proxy: {}", args.address);
+
     let provider = ProviderBuilder::new().connect(&server).await.unwrap();
 
-    let address = Address::from_hex(args.address).unwrap();
+    let address = Address::from_hex(args.address.clone()).unwrap();
 
     let contract = IHyperchain::new(address, provider.clone());
 
@@ -272,27 +299,63 @@ async fn main() {
     }
 
     println!("Got {} batches", batches.len());
-    let data = snark::load_snark_from_file(&args.snark_path).unwrap();
-    let mut proof: Vec<U256> = data
-        .iter()
-        .map(|x| U256::from_str_radix(x, 10).unwrap())
-        .collect();
 
-    // ohbender type
-    proof.insert(0, U256::from(2));
+    execute_batches(
+        server,
+        args.address,
+        args.start,
+        args.end,
+        &stored,
+        args.private_key,
+    )
+    .await;
+
+    todo!("foo");
 
     let prev_batch = args.start - 1;
 
-    // FRI from batch 1.
-    proof.insert(
-        1,
-        U256::from(0),
-        /*get_batch_public_input(
-            &stored.get(&(prev_batch - 1)).unwrap(),
-            &stored.get(&prev_batch).unwrap(),
-        )
-        .into(),*/
-    );
+    let proof = if let Some(snark_path) = args.snark_path {
+        let data = snark::load_snark_from_file(&snark_path).unwrap();
+        let mut proof: Vec<U256> = data
+            .iter()
+            .map(|x| U256::from_str_radix(x, 10).unwrap())
+            .collect();
+
+        // ohbender type
+        proof.insert(0, U256::from(2));
+
+        // FRI from batch 1.
+        proof.insert(
+            1,
+            U256::from(0),
+            /*get_batch_public_input(
+                &stored.get(&(prev_batch - 1)).unwrap(),
+                &stored.get(&prev_batch).unwrap(),
+            )
+            .into(),*/
+        );
+        proof
+    } else if let Some(public_input) = args.public_input {
+        let mut proof: Vec<U256> = vec![U256::from_str_radix(&public_input, 16).unwrap()];
+
+        // ohbender type
+        proof.insert(0, U256::from(3));
+
+        // FRI from batch 1.
+        proof.insert(
+            1,
+            U256::from(0),
+            /*get_batch_public_input(
+                &stored.get(&(prev_batch - 1)).unwrap(),
+                &stored.get(&prev_batch).unwrap(),
+            )
+            .into(),*/
+        );
+        proof.insert(2, 13.try_into().unwrap());
+        proof
+    } else {
+        panic!("Wrong path");
+    };
 
     let mut proof_data = vec![0u8];
 
@@ -340,6 +403,180 @@ async fn main() {
             .send()
             .await
             .unwrap();
+        println!("Transaction sent: {}", tx.tx_hash());
+        let receipt = tx.get_receipt().await.unwrap();
+        if receipt.status() {
+            println!("Transaction succeeded: {:?}", receipt);
+        } else {
+            println!("Transaction failed: {:?}", receipt);
+        }
+    }
+}
+
+pub async fn get_l1_tx_for_block(l2_sequencer: &str, block: u64) -> Vec<String> {
+    let client = Client::new();
+
+    // First, get block hash from block number.
+    let block_number_hex = format!("0x{:x}", block);
+
+    let transaction_hashes = {
+        let req_body = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "eth_getBlockByNumber",
+            "params": [block_number_hex, false]
+        });
+        let resp = client
+            .post(l2_sequencer)
+            .json(&req_body)
+            .send()
+            .await
+            .expect("Failed to send request");
+        let json: Value = resp.json().await.expect("Invalid JSON");
+
+        json["result"]["transactions"]
+            .as_array()
+            .expect("Transactions not found")
+            .iter()
+            .map(|x| x.as_str().unwrap().to_string())
+            .collect::<Vec<_>>()
+    };
+
+    let transactions = {
+        let req_body = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "eth_getBlockByNumber",
+            "params": [block_number_hex, true]
+        });
+        let resp = client
+            .post(l2_sequencer)
+            .json(&req_body)
+            .send()
+            .await
+            .expect("Failed to send request");
+        let json: Value = resp.json().await.expect("Invalid JSON");
+
+        json["result"]["transactions"]
+            .as_array()
+            .expect("Transactions not found")
+            .clone()
+    };
+
+    assert_eq!(transaction_hashes.len(), transactions.len());
+
+    let l1_hashes = transaction_hashes
+        .iter()
+        .zip(transactions.iter())
+        .filter_map(|(tx_hash, tx)| {
+            if tx["type"].as_str() == Some("0x2a") {
+                Some(tx_hash.clone())
+            } else {
+                None
+            }
+        })
+        .collect::<Vec<_>>();
+
+    l1_hashes
+}
+
+pub async fn execute_batches(
+    server: String,
+    address: String,
+    start: u64,
+    end: u64,
+    stored: &HashMap<u64, StoredBatchInfo>,
+    private_key: Option<String>,
+) {
+    let provider = ProviderBuilder::new().connect(&server).await.unwrap();
+
+    let address = Address::from_hex(address).unwrap();
+
+    let contract = IHyperchain::new(address, provider.clone());
+
+    // Execute start
+    let mut execute_data = vec![0u8];
+
+    let new_batches = (start..=end)
+        .map(|x| stored.get(&x).unwrap().clone())
+        .collect();
+
+    let mut l1_tx_map = HashMap::new();
+
+    // Actually start from block 1.
+    for block in 1..=end {
+        let l1_txs = get_l1_tx_for_block("http://localhost:3050", block.into()).await;
+        let txs = l1_txs
+            .iter()
+            .map(|tx_hash| B256::from_hex(tx_hash).expect("Invalid L1 transaction hash"))
+            .collect::<Vec<B256>>();
+        l1_tx_map.insert(block, txs);
+    }
+
+    let merkle_info = MerkleInfoForExecute::init(&l1_tx_map);
+
+    let priority_ops = (start..=end)
+        .map(|x| {
+            let batch = stored.get(&x).unwrap();
+            let batch_l1_txs: u64 = batch.numberOfLayer1Txs.try_into().unwrap();
+            println!("Batch {} l1txs: {}", x, batch.numberOfLayer1Txs);
+            println!("priority op hash: {}", batch.priorityOperationsHash);
+            let item_hashes = l1_tx_map.get(&x).unwrap().clone();
+            assert_eq!(item_hashes.len() as u64, batch_l1_txs);
+
+            let paths = merkle_info.get_merkle_path_for_l1_tx_in_block(x).clone();
+            println!("Left path: {:?}", paths.0);
+            println!("Right path: {:?}", paths.1);
+
+            // Number of item hashes must match number of l1tx in a given batch.
+            //let item_hashes = vec![FixedBytes::ZERO; batch.numberOfLayer1Txs.try_into().unwrap()];
+            IHyperchain::PriorityOpsBatchInfo {
+                leftPath: paths.0,
+                rightPath: paths.1,
+                itemHashes: item_hashes,
+            }
+        })
+        .collect();
+
+    let proof_payload = IHyperchain::executePayloadCall {
+        executeData: new_batches,
+        priorityOps: priority_ops,
+    };
+
+    proof_payload.abi_encode_raw(&mut execute_data);
+
+    let _ = contract
+        .executeBatchesSharedBridge(
+            0.try_into().unwrap(),
+            start.try_into().unwrap(),
+            end.try_into().unwrap(),
+            execute_data.clone().into(),
+        )
+        .call()
+        .await
+        .unwrap();
+
+    if let Some(private_key) = private_key {
+        let signer: PrivateKeySigner = private_key.parse().unwrap();
+        let provider = ProviderBuilder::new()
+            .wallet(signer)
+            .connect(&server)
+            .await
+            .unwrap();
+        let contract = IHyperchain::new(address, provider.clone());
+        let tx = contract
+            .executeBatchesSharedBridge(
+                0.try_into().unwrap(),
+                start.try_into().unwrap(),
+                end.try_into().unwrap(),
+                execute_data.into(),
+            )
+            .max_priority_fee_per_gas(2_000_000_002)
+            .max_fee_per_gas(2_000_000_002)
+            .send()
+            .await
+            .unwrap();
+
         println!("Transaction sent: {}", tx.tx_hash());
         let receipt = tx.get_receipt().await.unwrap();
         if receipt.status() {

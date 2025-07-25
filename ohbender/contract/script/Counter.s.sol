@@ -7,11 +7,15 @@ import {L1VerifierPlonk} from "../src/L1VerifierPlonk.sol";
 import {L1VerifierFflonk} from "../src/L1VerifierFflonk.sol";
 import {DualVerifier} from "../src/DualVerifier.sol";
 
+import {SetVerifierHelper} from "../src/SetVerifierHelper.sol";
+
 contract CounterScript is Script {
     Counter public counter;
     L1VerifierPlonk public l1VerifierPlonk;
     L1VerifierFflonk public l1VerifierFflonk;
     DualVerifier public dualVerifier;
+
+    SetVerifierHelper public verifierHelper;
 
     function setUp() public {}
 
@@ -24,6 +28,9 @@ contract CounterScript is Script {
         dualVerifier = new DualVerifier(l1VerifierFflonk, l1VerifierPlonk);
         console.log("Dual verifier address:", address(dualVerifier));
         console.log("Plonk verifier address:", address(l1VerifierPlonk));
+
+        verifierHelper = new SetVerifierHelper();
+        console.log("Verifier helper address:", address(verifierHelper));
 
         vm.stopBroadcast();
     }
