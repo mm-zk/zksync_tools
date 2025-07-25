@@ -19,6 +19,11 @@ pub async fn fake_prove_batches<P: Provider + Clone>(
     public_input: String,
     dry_run: bool,
 ) {
+    let public_input = if public_input.starts_with("0x") {
+        public_input.trim_start_matches("0x").to_string()
+    } else {
+        public_input
+    };
     let proof: Vec<U256> = vec![
         // Fake proof type
         U256::from(FAKE_PROOF_TYPE),

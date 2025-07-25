@@ -1,8 +1,19 @@
 # Prove & Execute
 A small tool that allows you to call prove & execute on Zksync diamond proxy chains.
 
+
+## TL;DR
+
+To fake-proof & execute all the committed batches, simply run:
+
+```
+cargo run -- --address $DIAMOND_PROXY_ADDR --private-key $PRIVATE_KEY fake-prove-and-execute
+```
+
+
 ## E2E example.
 
+Here you can see the process in more details.
 
 Private key is from the 'rich' account in anvil.
 

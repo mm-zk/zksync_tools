@@ -223,6 +223,13 @@ enum Command {
         #[clap(flatten)]
         range: ArgsRange,
     },
+    /// Figures out the non-proven or executed batches, and uses fake prover to prove & execute them.
+    FakeProveAndExecute {
+        #[arg(long)]
+        /// Address of the L2 sequencer to use for execution.
+        /// If not specified, it will use the local one.
+        l2_sequencer: Option<String>,
+    },
     /// Takes existing SNARK proof and submits it to the contract.
     Prove {
         /// Path to the file with SNARK proof.
@@ -490,6 +497,79 @@ async fn main() {
                 dry_run,
             )
             .await;
+        }
+        Command::FakeProveAndExecute { l2_sequencer } => {
+            let l2_sequencer = l2_sequencer.unwrap_or_else(|| match args.server_url {
+                Some(_) => panic!("You set --server-url, so you must specify --l2-sequencer"),
+                None => "http://localhost:3050".to_string(),
+            });
+            if dry_run {
+                panic!("please provide --private-key to run this command");
+            }
+
+            let total_committed = contract
+                .getTotalBatchesCommitted()
+                .call()
+                .await
+                .unwrap()
+                .try_into()
+                .unwrap();
+            let total_verified: u64 = contract
+                .getTotalBatchesVerified()
+                .call()
+                .await
+                .unwrap()
+                .try_into()
+                .unwrap();
+            let total_executed: u64 = contract
+                .getTotalBatchesExecuted()
+                .call()
+                .await
+                .unwrap()
+                .try_into()
+                .unwrap();
+
+            if total_committed != total_verified {
+                println!(
+                    "Fake proving from {} to {}",
+                    total_verified + 1,
+                    total_committed
+                );
+                let public_input =
+                    snark_public_input_for_range(&stored, total_verified + 1, total_committed);
+                fake_prove_batches(
+                    contract.clone(),
+                    total_verified + 1,
+                    total_committed,
+                    &stored,
+                    public_input.to_string(),
+                    dry_run,
+                )
+                .await;
+            }
+
+            if total_executed != total_committed {
+                println!(
+                    "Executing from {} to {}",
+                    total_executed + 1,
+                    total_committed
+                );
+                execute_batches(
+                    contract,
+                    total_executed + 1,
+                    total_committed,
+                    &l2_sequencer,
+                    &stored,
+                    dry_run,
+                )
+                .await;
+                println!(
+                    "\x1b[32mAll batches (up to batch {}) proven and executed\x1b[0m",
+                    total_committed
+                );
+            } else {
+                println!("Nothing to execute, all batches are executed already");
+            }
         }
     };
 }
