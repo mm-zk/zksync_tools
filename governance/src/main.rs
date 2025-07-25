@@ -1,19 +1,10 @@
-use std::collections::{HashMap, HashSet};
-
 use alloy::{
-    primitives::{Address, B256, FixedBytes, U256, Uint, keccak256},
+    primitives::{Address, B256, FixedBytes, keccak256},
     signers::local::PrivateKeySigner,
 };
 use clap::Parser;
 
-use alloy::{
-    consensus::Transaction,
-    hex::FromHex,
-    providers::{Provider, ProviderBuilder},
-    rpc::types::Filter,
-    sol,
-    sol_types::{SolCall, SolEvent},
-};
+use alloy::{hex::FromHex, providers::ProviderBuilder, sol};
 
 sol! {
     #[sol(rpc)]
@@ -283,124 +274,4 @@ async fn main() {
             println!("Transaction failed: {:?}", receipt);
         }
     }
-
-    /*let transactions = iterate_blocks_for_event(
-        provider.clone(),
-        address,
-        IHyperchain::BlockCommit::SIGNATURE_HASH,
-        10000,
-        // scan at most 1M blocks.
-        Some(1_000_000),
-    )
-    .await
-    .unwrap();
-
-    let mut batches = HashMap::new();
-    let mut stored = HashMap::new();
-
-    for tx_hash in transactions {
-        let tx_data = provider
-            .get_transaction_by_hash(tx_hash)
-            .await
-            .unwrap()
-            .expect("Transaction not found");
-
-        let tx = tx_data.inner.as_eip1559().unwrap().tx();
-
-        if tx.input[..4] != IHyperchain::commitBatchesSharedBridgeCall::SELECTOR {
-            println!("Skipping transaction: {}", tx_hash);
-            continue;
-        }
-
-        let decoded = IHyperchain::commitBatchesSharedBridgeCall::abi_decode(tx.input()).unwrap();
-
-        let commit_data = &decoded._3.clone()[1..];
-        //println!("commit data: 0x{}", hex::encode(commit_data));
-        //let ww = IHyperchain::tmpStuffCall::abi_decode_raw(commit_data).unwrap();
-
-        let ww = IHyperchain::tmpStuffCall::abi_decode_raw(commit_data).unwrap();
-        for other in ww.commits {
-            batches.insert(other.batchNumber.clone(), other.clone());
-            stored.insert(other.batchNumber, commit_to_stored(other));
-        }
-        stored.insert(ww.stored.batchNumber, ww.stored);
-    }
-
-    println!("Got {} batches", batches.len());
-    let data = snark::load_snark_from_file(&args.snark_path).unwrap();
-    let mut proof: Vec<U256> = data
-        .iter()
-        .map(|x| U256::from_str_radix(x, 10).unwrap())
-        .collect();
-
-    // ohbender type
-    proof.insert(0, U256::from(2));
-
-    let prev_batch = args.start - 1;
-
-    // FRI from batch 1.
-    proof.insert(
-        1,
-        U256::from(0),
-        /*get_batch_public_input(
-            &stored.get(&(prev_batch - 1)).unwrap(),
-            &stored.get(&prev_batch).unwrap(),
-        )
-        .into(),*/
-    );
-
-    let mut proof_data = vec![0u8];
-
-    let new_batches = (args.start..=args.end)
-        .map(|x| stored.get(&x).unwrap().clone())
-        .collect();
-
-    let proof_payload = IHyperchain::proofPayloadCall {
-        old: stored.get(&prev_batch).unwrap().clone(),
-        newInfo: new_batches,
-        proof,
-    };
-
-    proof_payload.abi_encode_raw(&mut proof_data);
-
-    let _ = contract
-        .proveBatchesSharedBridge(
-            0.try_into().unwrap(),
-            args.start.try_into().unwrap(),
-            args.end.try_into().unwrap(),
-            proof_data.clone().into(),
-        )
-        .call()
-        .await
-        .unwrap();
-
-    if let Some(private_key) = args.private_key {
-        let signer: PrivateKeySigner = private_key.parse().unwrap();
-        let provider = ProviderBuilder::new()
-            .wallet(signer)
-            .connect(&server)
-            .await
-            .unwrap();
-        let contract = IHyperchain::new(address, provider.clone());
-
-        let tx = contract
-            .proveBatchesSharedBridge(
-                0.try_into().unwrap(),
-                args.start.try_into().unwrap(),
-                args.end.try_into().unwrap(),
-                proof_data.into(),
-            )
-            .max_priority_fee_per_gas(2_000_000_002)
-            .max_fee_per_gas(2_000_000_002)
-            .send()
-            .await
-            .unwrap();
-        println!("Transaction sent: {}", tx.tx_hash());
-        let receipt = tx.get_receipt().await.unwrap();
-        if receipt.status() {
-            println!("Transaction succeeded: {:?}", receipt);
-        } else {
-            println!("Transaction failed: {:?}", receipt);
-        }
-    }*/
 }
