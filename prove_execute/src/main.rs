@@ -350,11 +350,13 @@ pub async fn fetch_batches<P: Provider + Clone>(
     let mut stored = HashMap::new();
 
     for tx_hash in transactions {
-        let tx_data = provider
-            .get_transaction_by_hash(tx_hash)
-            .await
-            .unwrap()
-            .expect("Transaction not found");
+        let tx = provider.get_transaction_by_hash(tx_hash).await;
+        if tx.is_err() {
+            println!("Error fetching transaction {}", tx_hash);
+            continue;
+        }
+
+        let tx_data = tx.unwrap().expect("Transaction not found");
 
         let tx = tx_data.inner.as_eip1559().unwrap().tx();
 
