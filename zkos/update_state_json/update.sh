@@ -362,8 +362,14 @@ bridgehub_address=$(grep 'bridgehub_proxy_addr:' ecosystem/local_v1/chains/era1/
 get_wallet_pk() {
     local wallet_name="$1"
     pk_dec=$(yq ".${wallet_name}.private_key" ecosystem/local_v1/chains/era1/configs/wallets.yaml)
-    pk_hex=$(echo "obase=16; $pk_dec" | bc | tr 'A-F' 'a-f')
-    printf "0x%064s\n" "$pk_hex" | tr ' ' 0
+    if [[ "$pk_dec" =~ ^0x[0-9a-fA-F]+$ ]]; then
+        # already hex with 0x
+        echo $pk_dec
+    else
+        # assume decimal, convert to hex
+        pk_hex=$(echo "obase=16; $pk_dec" | bc | tr 'A-F' 'a-f')
+        printf "0x%064s\n" "$pk_hex" | tr ' ' 0
+    fi
 }
 
 
