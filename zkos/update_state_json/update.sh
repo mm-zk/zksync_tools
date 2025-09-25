@@ -214,7 +214,7 @@ register_verifier_at() {
 
     ctm_owner_pk=$(yq ".governor.private_key" ecosystem/local_v1/configs/wallets.yaml)
 
-    cast send --rpc-url http://localhost:8545 $verifier_hex 'addVerifier(uint32,address,address)' $exec_version $plonk_address $fflonk_address --private-key $ctm_owner_pk
+    cast send --rpc-url http://localhost:8545 $verifier_hex 'addVerifier(uint32,address,address)' $exec_version $fflonk_address $plonk_address --private-key $ctm_owner_pk
 }
 
 
