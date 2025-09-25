@@ -192,6 +192,31 @@ deploy_l1_contracts() {
   popd > /dev/null
 }
 
+maybe_dec_to_hex() {
+    local str="$1"
+    if [[ "$str" =~ ^0x[0-9a-fA-F]+$ ]]; then
+        # already hex with 0x
+        echo $str
+    else
+        # assume decimal, convert to hex
+        hex=$(echo "obase=16; $str" | bc | tr 'A-F' 'a-f')
+        printf "0x%064s\n" "$hex" | tr ' ' 0
+    fi
+}
+
+register_verifier_at() {
+    local exec_version="$1"
+    verifier_dec=$(yq ".l1.verifier_addr" ecosystem/local_v1/chains/era1/configs/contracts.yaml)
+    verifier_hex=$(maybe_dec_to_hex "$verifier_dec")
+
+    plonk_address=$(cast call --rpc-url http://localhost:8545 $verifier_hex 'plonkVerifiers(uint32)(address)' 0)
+    fflonk_address=$(cast call --rpc-url http://localhost:8545 $verifier_hex 'fflonkVerifiers(uint32)(address)' 0)
+
+    ctm_owner_pk=$(yq ".governor.private_key" ecosystem/local_v1/configs/wallets.yaml)
+
+    cast send --rpc-url http://localhost:8545 $verifier_hex 'addVerifier(uint32,address,address)' $exec_version $plonk_address $fflonk_address --private-key $ctm_owner_pk
+}
+
 
 update_bridgehub_address() {
     NEW_ADDR=$bridgehub_address perl -0777 -i -pe '
@@ -371,19 +396,19 @@ fund_accounts
 
 deploy_l1_contracts $ERA_CONTRACTS_TAG
 
+if [[ -z "${ZKSYNC_OS_EXECUTION_VERSION:-}" ]]; then
+  ZKSYNC_OS_EXECUTION_VERSION=2
+  printf "ZKSYNC_OS_EXECUTION_VERSION not set, defaulting to %s\n" "ZKSYNC_OS_EXECUTION_VERSION"
+fi
+register_verifier_at $ZKSYNC_OS_EXECUTION_VERSION
+
 bridgehub_address=$(grep 'bridgehub_proxy_addr:' ecosystem/local_v1/chains/era1/configs/contracts.yaml | awk '{print $2}')
 
 get_wallet_pk() {
     local wallet_name="$1"
     pk_dec=$(yq ".${wallet_name}.private_key" ecosystem/local_v1/chains/era1/configs/wallets.yaml)
-    if [[ "$pk_dec" =~ ^0x[0-9a-fA-F]+$ ]]; then
-        # already hex with 0x
-        echo $pk_dec
-    else
-        # assume decimal, convert to hex
-        pk_hex=$(echo "obase=16; $pk_dec" | bc | tr 'A-F' 'a-f')
-        printf "0x%064s\n" "$pk_hex" | tr ' ' 0
-    fi
+    pk_hex=$(maybe_dec_to_hex "$pk_dec")
+    echo $pk_hex
 }
 
 
