@@ -2,11 +2,12 @@ use std::{collections::HashMap, str::FromStr};
 
 use alloy::{
     consensus::Transaction,
+    dyn_abi::SolType,
     primitives::{Address, B256},
     providers::{Provider, ProviderBuilder},
     rpc::types::Filter,
     sol,
-    sol_types::SolEvent, // for ABI-safe decoding of the commit function
+    sol_types::{SolCall, SolEvent}, // for ABI-safe decoding of the commit function
 };
 use anyhow::{Context, Result, bail};
 use clap::Parser;
@@ -14,6 +15,7 @@ use clap::Parser;
 // Define the function we care about for optional decoding.
 // This generates `commitBatchesSharedBridgeCall` rust type with `abi_decode`.
 sol! {
+    #[derive(Debug)]
     function commitBatchesSharedBridge(
         address _chainAddress,
         uint256 _processFrom,
@@ -22,6 +24,35 @@ sol! {
     );
     event BlockCommit(uint256 indexed batchNumber, bytes32 indexed batchHash, bytes32 indexed commitment);
 
+    struct StoredBatchInfo {
+        uint64 batchNumber;
+        bytes32 batchHash;
+        uint64 indexRepeatedStorageChanges;
+        uint256 numberOfLayer1Txs;
+        bytes32 priorityOperationsHash;
+        bytes32 dependencyRootsRollingHash;
+        bytes32 l2LogsTreeRoot;
+        uint256 timestamp;
+        bytes32 commitment;
+    }
+
+    struct CommitBatchInfoZKsyncOS {
+        uint64 batchNumber;
+        bytes32 newStateCommitment;
+        uint256 numberOfLayer1Txs;
+        bytes32 priorityOperationsHash;
+        bytes32 dependencyRootsRollingHash;
+        bytes32 l2LogsTreeRoot;
+        address l2DaValidator;
+        bytes32 daCommitment;
+        uint64 firstBlockTimestamp;
+        uint64 lastBlockTimestamp;
+        uint256 chainId;
+        bytes operatorDAInput;
+    }
+
+    // A dummy function that takes the same parameters we encoded.
+    function __decodeParams(StoredBatchInfo, CommitBatchInfoZKsyncOS[]);
 
 }
 
@@ -112,6 +143,8 @@ pub struct BatchInfo {
     pub batch_hash: B256,
     pub commitment: B256,
     pub calldata: Vec<u8>,
+    pub stored: StoredBatchInfo,
+    pub commits: Vec<CommitBatchInfoZKsyncOS>,
 }
 
 async fn scan_commits_via_logs<P: Provider + Clone>(
@@ -171,6 +204,15 @@ async fn scan_commits_via_logs<P: Provider + Clone>(
                 hex::encode(&calldata),
             );
 
+            let commit_call = commitBatchesSharedBridgeCall::abi_decode(&calldata).unwrap();
+
+            let commit_data_without_prefix = &commit_call._commitData[1..]; // skip the first byte (version)
+
+            let decode_params =
+                __decodeParamsCall::abi_decode_raw(commit_data_without_prefix).unwrap();
+
+            let (stored, commits) = (decode_params._0, decode_params._1);
+
             let batch_number: u64 = batch.try_into().unwrap();
             results.insert(
                 batch_number,
@@ -179,6 +221,8 @@ async fn scan_commits_via_logs<P: Provider + Clone>(
                     batch_hash,
                     commitment,
                     calldata: calldata.to_vec(),
+                    stored,
+                    commits,
                 },
             );
         }
