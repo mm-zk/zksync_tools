@@ -12,6 +12,10 @@ use alloy::{
 use anyhow::{Context, Result, bail};
 use clap::Parser;
 
+use crate::statediffs::StateDiff;
+
+pub mod statediffs;
+
 // Define the function we care about for optional decoding.
 // This generates `commitBatchesSharedBridgeCall` rust type with `abi_decode`.
 sol! {
@@ -145,6 +149,8 @@ pub struct BatchInfo {
     pub calldata: Vec<u8>,
     pub stored: StoredBatchInfo,
     pub commits: Vec<CommitBatchInfoZKsyncOS>,
+    pub state_diffs: Vec<StateDiff>,
+    pub logs: Vec<statediffs::Log>,
 }
 
 async fn scan_commits_via_logs<P: Provider + Clone>(
@@ -214,10 +220,9 @@ async fn scan_commits_via_logs<P: Provider + Clone>(
             let (stored, commits) = (decode_params._0, decode_params._1);
 
             let tmp = &commits[0];
-            {
-                dbg!(tmp.operatorDAInput.len());
-                dbg!(&tmp.operatorDAInput);
-            }
+            assert_eq!(1, commits.len());
+
+            let (state_diffs, logs) = parse_da_input(&tmp.operatorDAInput).unwrap();
 
             let batch_number: u64 = batch.try_into().unwrap();
             results.insert(
@@ -229,6 +234,8 @@ async fn scan_commits_via_logs<P: Provider + Clone>(
                     calldata: calldata.to_vec(),
                     stored,
                     commits,
+                    state_diffs,
+                    logs,
                 },
             );
         }
@@ -236,3 +243,193 @@ async fn scan_commits_via_logs<P: Provider + Clone>(
 
     Ok(results)
 }
+
+pub fn parse_da_input(input: &[u8]) -> Result<(Vec<StateDiff>, Vec<statediffs::Log>)> {
+    // first 32 bytes should be 0, the next 32 is some keccak.
+    if input.len() < 64 {
+        eprintln!("DA input too short: {}", input.len());
+        return Err(anyhow::anyhow!("DA input too short"));
+    }
+    // not sure what this prefix is..
+    let prefix = &input[0..32];
+    let pubdata_hash = &input[32..64];
+    if prefix.iter().any(|&b| b != 0) {
+        eprintln!("DA input prefix not zero: {:x?}", prefix);
+        return Err(anyhow::anyhow!("DA input prefix not zero"));
+    }
+    eprintln!("pubdata input hash: 0x{}", hex::encode(pubdata_hash));
+    let blob_count = &input[64];
+    // for calldata, blobcount should be 1.
+
+    eprintln!("blob count: {}", blob_count);
+    let mut offset = 65;
+    // another 32 bytes that should be 0.
+    if input.len() < offset + 32 {
+        eprintln!("DA input too short for second zero: {}", input.len());
+        return Err(anyhow::anyhow!("DA input too short for second zero"));
+    }
+    let mid = &input[offset..offset + 32];
+    if mid.iter().any(|&b| b != 0) {
+        eprintln!("DA input mid not zero: {:x?}", mid);
+        return Err(anyhow::anyhow!("DA input mid not zero"));
+    }
+    offset += 32;
+
+    let calldata_type = &input[offset];
+    eprintln!("calldata type: {}", calldata_type);
+    assert_eq!(&0, calldata_type); // we only handle calldata type 0
+
+    offset += 1;
+
+    // remaining bytes:
+    let pubdata = &input[offset..];
+    eprintln!("pubdata len: {}", pubdata.len());
+
+    // now for pubdata itself.
+
+    // First 32 should be some hash.
+    if pubdata.len() < 32 {
+        eprintln!("pubdata too short for hash: {}", pubdata.len());
+        return Err(anyhow::anyhow!("pubdata too short for hash"));
+    }
+    // This is the 'current_block_hash' from io_subsystem.rs 'finish'
+    let pubdata_hash2 = &pubdata[0..32];
+    eprintln!("pubdata?? hash: 0x{}", hex::encode(pubdata_hash2));
+
+    let (state_diff_offset, state_diff) = StateDiff::new_from_stream(&pubdata[32..]);
+    eprintln!("pubdata parsed len: {}", state_diff_offset);
+    eprintln!("pubdata state diff: {:#?}", state_diff);
+
+    let remaining = &pubdata[32 + state_diff_offset as usize..];
+
+    // u32 for logs length
+    if remaining.len() < 4 {
+        eprintln!("pubdata too short for logs len: {}", remaining.len());
+        return Err(anyhow::anyhow!("pubdata too short for logs len"));
+    }
+    let logs_len = u32::from_be_bytes(
+        remaining[0..4]
+            .try_into()
+            .expect("slice with incorrect length"),
+    );
+    eprintln!("pubdata logs len: {}", logs_len);
+
+    let mut offset = 4;
+
+    let mut logs = Vec::new();
+
+    for _ in 0..logs_len {
+        let (consumed, log) = statediffs::Log::new_from_stream(&remaining[offset..]);
+        println!("log: {:#?}", log);
+
+        logs.push(log);
+        offset += consumed as usize;
+    }
+
+    let messages_len: u32 = if remaining.len() < offset + 4 {
+        eprintln!("pubdata too short for messages len: {}", remaining.len());
+        return Err(anyhow::anyhow!("pubdata too short for messages len"));
+    } else {
+        u32::from_be_bytes(
+            remaining[offset..offset + 4]
+                .try_into()
+                .expect("slice with incorrect length"),
+        )
+    };
+    offset += 4;
+
+    println!("pubdata messages len: {}", messages_len);
+
+    if messages_len > 0 {
+        todo!();
+    }
+
+    println!("pubdata remaining len: {}", remaining.len() - offset);
+    assert_eq!(remaining.len() - offset, 32);
+
+    let last_slot = B256::from_slice(&remaining[offset..offset + 32]);
+    println!("last slot: {:?}", last_slot);
+    assert_eq!(last_slot, B256::ZERO);
+
+    Ok((state_diff, logs))
+}
+
+/*
+
+// some 'zero' ?
+0000000000000000000000000000000000000000000000000000000000000000
+// keccak of pubdata
+6eb0d00bd36db7ddad60a3cd5b94a289466d825c2038ff8393f451d634c9bd63
+01 // 1 ??
+// another 0 ?
+0000000000000000000000000000000000000000000000000000000000000000
+// calldata
+00
+// pubdata - concat from many blocks (but we have only 1)
+//  -- maybe some hash?
+b76ffe1f37a1892d5fbf5284c611035bf1616584838ce7772481030027cd950d
+
+
+00000002003ac1e7247f50b6ea3ed2d1c63ce2511668e0d06882fa7a44bbcb0fb31c2e2e1c09010a6431f21254a08b1b0060d9dc74ad5f1ff038e24a6ebc26260a4a03a8d036011b591409640000000000000000
+
+
+// some finishing 0s.
+0000000000000000000000000000000000000000000000000000000000000000
+
+
+on 'finish' we push current block hash.
+
+*/
+
+/* decoding experiment
+
+
+00 -- ?
+000002003ac1e7247f50b6ea3ed2d1c63ce2511668e0d06882fa7a44bbcb0fb3
+
+1c
+2e2e1c09010a6431f21254a08b1b0060d9dc74ad5f1ff038e24a6ebc26260a4a03a8d036011b591409640000000000000000
+
+// experiment 2:
+( I've transferred 100 (0x64) wei, so it has to be somewhere.)
+
+
+// Start with fiat_storage_model
+// first u32 -- is number of diffs.
+
+
+00000002 -- ok, 2 diffs.
+
+// Then for each key - it will be eitehr a storage slot or entry in account properties.
+// But first 32 will always be the address.
+
+003ac1e7247f50b6ea3ed2d1c63ce2511668e0d06882fa7a44bbcb0fb31c2e2e
+
+1c -- 28 -- this means it is a 'small' diff, where both nonce and balance hash changed.
+// now comes the 'nonce compression'
+
+09 -- (this is 'add' - lenght == 1, )
+
+01 --nonce increased by 1
+
+
+0a -- this is a 'sub' with length = 1
+
+64 -- and we subtracted 100 (0x64) from balance.
+
+// now comes second diff key
+31f21254a08b1b0060d9dc74ad5f1ff038e24a6ebc26260a4a03a8d036011b59
+
+
+14 -- so minimal plus only balance changed
+
+09 -- so this is 'add'
+
+64 -- 0x64 - 100 - added.
+
+
+
+00000000 -- these could be u32 for logs
+00000000 -- and this is for messages.
+
+*/
