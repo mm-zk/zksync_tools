@@ -195,13 +195,13 @@ async fn scan_commits_via_logs<P: Provider + Clone>(
             let calldata = tx.input().clone();
 
             println!(
-                "{{\"block\":{},\"tx\":\"0x{}\",\"batchNumber\":{},\"batchHash\":\"0x{}\",\"commitment\":\"0x{}\",\"calldata\":\"0x{}\"}}",
+                "{{\"block\":{},\"tx\":\"0x{}\",\"batchNumber\":{},\"batchHash\":\"0x{}\",\"commitment\":\"0x{}\"}}",
                 lg.block_number.unwrap_or_default(),
                 hex::encode(tx_hash.as_slice()),
                 batch,
                 hex::encode(batch_hash.as_slice()),
                 hex::encode(commitment.as_slice()),
-                hex::encode(&calldata),
+                //hex::encode(&calldata),
             );
 
             let commit_call = commitBatchesSharedBridgeCall::abi_decode(&calldata).unwrap();
@@ -212,6 +212,12 @@ async fn scan_commits_via_logs<P: Provider + Clone>(
                 __decodeParamsCall::abi_decode_raw(commit_data_without_prefix).unwrap();
 
             let (stored, commits) = (decode_params._0, decode_params._1);
+
+            let tmp = &commits[0];
+            {
+                dbg!(tmp.operatorDAInput.len());
+                dbg!(&tmp.operatorDAInput);
+            }
 
             let batch_number: u64 = batch.try_into().unwrap();
             results.insert(
