@@ -1,4 +1,4 @@
-use std::str::FromStr;
+use std::{collections::HashMap, str::FromStr};
 
 use alloy::{
     consensus::Transaction,
@@ -85,14 +85,33 @@ async fn main() -> Result<()> {
     );
 
     let mut start = from;
+
+    let mut full_results = HashMap::new();
     while start <= to {
         let end = (start + args.chunk - 1).min(to);
         //scan_range(&provider, target, start, end, args.decode_commit).await?;
-        scan_commits_via_logs(&provider, target, start, end).await?;
+        let scan_results = scan_commits_via_logs(&provider, target, start, end).await?;
+        full_results.extend(scan_results);
         start = end.saturating_add(1);
+    }
+    eprintln!("Scanned {} batches", full_results.len());
+
+    // get sorted keys from full_results
+    let mut batch_numbers: Vec<u64> = full_results.keys().cloned().collect();
+    batch_numbers.sort_unstable();
+    for batch_number in batch_numbers {
+        let info = full_results.get(&batch_number).unwrap();
+        println!("Batch {}: {:?}", batch_number, info.batch_hash);
     }
 
     Ok(())
+}
+
+pub struct BatchInfo {
+    pub batch_number: u64,
+    pub batch_hash: B256,
+    pub commitment: B256,
+    pub calldata: Vec<u8>,
 }
 
 async fn scan_commits_via_logs<P: Provider + Clone>(
@@ -100,7 +119,7 @@ async fn scan_commits_via_logs<P: Provider + Clone>(
     address: Address,
     from: u64,
     to: u64,
-) -> Result<()> {
+) -> Result<HashMap<u64, BatchInfo>> {
     // Build a filter: address + topic0 = event signature. Indexed params (batchNumber, batchHash, commitment)
     // can also be filtered later via `topic1/2/3` if needed.
     let filter = Filter::new()
@@ -114,6 +133,8 @@ async fn scan_commits_via_logs<P: Provider + Clone>(
         .get_logs(&filter)
         .await
         .context("get_logs(BlockCommit)")?;
+
+    let mut results = HashMap::new();
 
     for lg in logs {
         // Each log belongs to a tx; pull its calldata using the tx hash.
@@ -147,10 +168,21 @@ async fn scan_commits_via_logs<P: Provider + Clone>(
                 batch,
                 hex::encode(batch_hash.as_slice()),
                 hex::encode(commitment.as_slice()),
-                hex::encode(calldata),
+                hex::encode(&calldata),
+            );
+
+            let batch_number: u64 = batch.try_into().unwrap();
+            results.insert(
+                batch_number,
+                BatchInfo {
+                    batch_number,
+                    batch_hash,
+                    commitment,
+                    calldata: calldata.to_vec(),
+                },
             );
         }
     }
 
-    Ok(())
+    Ok(results)
 }
