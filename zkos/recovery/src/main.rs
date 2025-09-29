@@ -3,7 +3,7 @@ use std::{collections::HashMap, str::FromStr};
 use alloy::{
     consensus::Transaction,
     dyn_abi::SolType,
-    primitives::{Address, B256},
+    primitives::{Address, B256, U256},
     providers::{Provider, ProviderBuilder},
     rpc::types::Filter,
     sol,
@@ -11,8 +11,12 @@ use alloy::{
 };
 use anyhow::{Context, Result, bail};
 use clap::Parser;
+use zk_os_basic_system::system_implementation::flat_storage_model::AccountProperties;
 
-use crate::{state::init_genesis, statediffs::StateDiff};
+use crate::{
+    state::{LocalTree, init_genesis, init_tree_genesis},
+    statediffs::{StateDiff, ValueDiff},
+};
 
 pub mod state;
 pub mod statediffs;
@@ -98,13 +102,9 @@ async fn main() -> Result<()> {
 
     let genesis = init_genesis();
 
-    println!("Genesis header: {:#?}\n", genesis.header);
+    let mut tree = init_tree_genesis();
 
-    // and this 'hash slow' matches the 'parent hash' of the first block.
-    // cast block -r http://localhost:3050 0
-    println!("Genesis header hash: {:#?}\n", genesis.header.hash_slow());
-
-    return Ok(());
+    let mut preimage_store = HashMap::from_iter(genesis.preimages.iter().cloned());
 
     let provider = ProviderBuilder::new().connect_http(args.rpc.parse()?);
 
@@ -147,7 +147,10 @@ async fn main() -> Result<()> {
     batch_numbers.sort_unstable();
     for batch_number in batch_numbers {
         let info = full_results.get(&batch_number).unwrap();
+
         println!("Batch {}: {:?}", batch_number, info.batch_hash);
+
+        apply_batch(&mut tree, &mut preimage_store, info);
     }
 
     Ok(())
@@ -308,8 +311,8 @@ pub fn parse_da_input(input: &[u8]) -> Result<(Vec<StateDiff>, Vec<statediffs::L
     eprintln!("pubdata?? hash: 0x{}", hex::encode(pubdata_hash2));
 
     let (state_diff_offset, state_diff) = StateDiff::new_from_stream(&pubdata[32..]);
-    eprintln!("pubdata parsed len: {}", state_diff_offset);
-    eprintln!("pubdata state diff: {:#?}", state_diff);
+    //eprintln!("pubdata parsed len: {}", state_diff_offset);
+    //eprintln!("pubdata state diff: {:#?}", state_diff);
 
     let remaining = &pubdata[32 + state_diff_offset as usize..];
 
@@ -331,7 +334,7 @@ pub fn parse_da_input(input: &[u8]) -> Result<(Vec<StateDiff>, Vec<statediffs::L
 
     for _ in 0..logs_len {
         let (consumed, log) = statediffs::Log::new_from_stream(&remaining[offset..]);
-        println!("log: {:#?}", log);
+        //println!("log: {:#?}", log);
 
         logs.push(log);
         offset += consumed as usize;
@@ -444,3 +447,69 @@ on 'finish' we push current block hash.
 00000000 -- and this is for messages.
 
 */
+
+pub fn apply_batch(
+    tree: &mut LocalTree,
+    preimage_store: &mut HashMap<B256, Vec<u8>>,
+    info: &BatchInfo,
+) {
+    for diff in &info.state_diffs {
+        match diff.value {
+            statediffs::StateDiffValue::AccountProperties(ref ap) => {
+                println!("**AccountProperties diff: {:#?}", ap);
+                let account_hash = tree.get_value(diff.derived_key);
+                println!("**account hash: {:#x}", account_hash);
+
+                let properties = if account_hash.is_zero() {
+                    AccountProperties::default()
+                } else {
+                    AccountProperties::decode(
+                        &preimage_store
+                            .get(&account_hash)
+                            .unwrap()
+                            .clone()
+                            .try_into()
+                            .unwrap(),
+                    )
+                };
+                let properties = ap.update_itself(properties);
+
+                println!("**new account properties: {:#?}", properties);
+            }
+            statediffs::StateDiffValue::Value(ref v) => {
+                apply_value_diff(tree, diff.derived_key, v);
+            }
+        }
+    }
+}
+
+pub fn u256_to_b256(value: &U256) -> B256 {
+    let bytes = value.to_be_bytes();
+
+    B256::from(bytes)
+}
+
+pub fn b256_to_u256(value: &B256) -> U256 {
+    U256::from_be_bytes(value.0)
+}
+
+pub fn apply_value_diff(tree: &mut LocalTree, key: B256, diff: &ValueDiff) {
+    match diff {
+        ValueDiff::Nothing(v) => {
+            tree.add_entry(key, u256_to_b256(v));
+        }
+        ValueDiff::Add(v) => tree.add_entry(
+            key,
+            u256_to_b256(&b256_to_u256(&tree.get_value(key)).wrapping_add(*v)),
+        ),
+        ValueDiff::Sub(v) => {
+            tree.add_entry(
+                key,
+                u256_to_b256(&b256_to_u256(&tree.get_value(key)).wrapping_sub(*v)),
+            );
+        }
+        ValueDiff::Transform(v) => {
+            tree.add_entry(key, u256_to_b256(v));
+        }
+    };
+}

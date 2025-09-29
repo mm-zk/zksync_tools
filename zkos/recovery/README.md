@@ -41,6 +41,7 @@ cargo run -- --rpc http://localhost:8545 --address 0x8FdB49aBc1E2B891D91f64B15aE
 
 
 - [DONE] state diff unpacking from L1
-- creating state, and verifying hash 
+- [DONE] creating state, and verifying hash
+- Need to clean up bytecode hashes / AccountProperties computation and verify. 
 - applying the state to rocksDB
 - executing next batch
