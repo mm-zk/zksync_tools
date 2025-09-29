@@ -12,8 +12,9 @@ use alloy::{
 use anyhow::{Context, Result, bail};
 use clap::Parser;
 
-use crate::statediffs::StateDiff;
+use crate::{state::init_genesis, statediffs::StateDiff};
 
+pub mod state;
 pub mod statediffs;
 
 // Define the function we care about for optional decoding.
@@ -94,6 +95,16 @@ struct Args {
 #[tokio::main]
 async fn main() -> Result<()> {
     let args = Args::parse();
+
+    let genesis = init_genesis();
+
+    println!("Genesis header: {:#?}\n", genesis.header);
+
+    // and this 'hash slow' matches the 'parent hash' of the first block.
+    // cast block -r http://localhost:3050 0
+    println!("Genesis header hash: {:#?}\n", genesis.header.hash_slow());
+
+    return Ok(());
 
     let provider = ProviderBuilder::new().connect_http(args.rpc.parse()?);
 
