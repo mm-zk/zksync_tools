@@ -246,15 +246,30 @@ impl AccountPropertiesDiff {
         }
         if let Some(unpadded_code_len) = self.unpadded_code_len {
             result.unpadded_code_len = unpadded_code_len;
+        } else {
+            if let Some(force_bytecode_info) = force_bytecode_info {
+                result.unpadded_code_len = force_bytecode_info.len.try_into().unwrap();
+            }
         }
         if let Some(artifacts_len) = self.artifacts_len {
             result.artifacts_len = artifacts_len;
+        } else {
+            if let Some(force_bytecode_info) = force_bytecode_info {
+                result.artifacts_len = force_bytecode_info.artifacts_len.try_into().unwrap();
+            }
         }
         if let Some(observable_bytecode_hash) = self.observable_bytecode_hash {
             result
                 .observable_bytecode_hash
                 .as_u8_array_mut()
                 .copy_from_slice(&observable_bytecode_hash.0);
+        } else {
+            if let Some(force_bytecode_info) = force_bytecode_info {
+                result
+                    .observable_bytecode_hash
+                    .as_u8_array_mut()
+                    .copy_from_slice(&force_bytecode_info.observable_hash.0);
+            }
         }
         if let Some(observable_bytecode_len) = self.observable_bytecode_len {
             result.observable_bytecode_len = observable_bytecode_len;

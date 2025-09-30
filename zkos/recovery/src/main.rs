@@ -15,10 +15,12 @@ use clap::Parser;
 use zk_os_basic_system::system_implementation::flat_storage_model::AccountProperties;
 
 use crate::{
+    deploy::{BytecodeAnalysisResults, analyze_bytecode},
     state::{LocalTree, init_genesis, init_tree_genesis},
     statediffs::{StateDiff, ValueDiff},
 };
 
+pub mod deploy;
 pub mod state;
 pub mod statediffs;
 
@@ -492,6 +494,13 @@ async fn scan_genesis_upgrade<P: Provider + Clone>(
                 ev._factoryDeps.len(),
             );
 
+            let mut factory_deps_analyzed = HashMap::new();
+
+            for dep in ev._factoryDeps.iter() {
+                let analysis_result = analyze_bytecode(&dep);
+                factory_deps_analyzed.insert(analysis_result.bytecode_hash, analysis_result);
+            }
+
             // Now a bunch of hacks, to decode the actual L2 tx and preimages.
             let upgrade = upgradeCall::abi_decode(&ev._l2Transaction.data).unwrap();
             println!(
@@ -528,7 +537,10 @@ async fn scan_genesis_upgrade<P: Provider + Clone>(
             );
 
             // and now the hacky part begins.
-            let bridgehub_info = BytecodeInfo::parse(&fixed_deployment_data.bridgehubBytecodeInfo);
+            let bridgehub_info = BytecodeInfo::parse(
+                &fixed_deployment_data.bridgehubBytecodeInfo,
+                &factory_deps_analyzed,
+            );
             let bridgehub_address = address!("0000000000000000000000000000000000010002");
 
             println!("bridgehub info {:#?}", bridgehub_info);
@@ -550,11 +562,19 @@ async fn scan_genesis_upgrade<P: Provider + Clone>(
 pub struct BytecodeInfo {
     pub hash: B256,
     pub len: U256,
+    // not sure what that is..
     pub observable_hash: B256,
+
+    pub hash_with_artifacts: B256,
+    pub artifacts_len: usize,
+    // we'll probably have to add bytecodes too.
 }
 
 impl BytecodeInfo {
-    pub fn parse(bytecode_info: &[u8]) -> Self {
+    pub fn parse(
+        bytecode_info: &[u8],
+        factory_deps: &HashMap<B256, BytecodeAnalysisResults>,
+    ) -> Self {
         if bytecode_info.len() != 96 {
             panic!("bytecode info wrong length: {}", bytecode_info.len());
         }
@@ -567,10 +587,19 @@ impl BytecodeInfo {
             "bytecode info observable hash: 0x{}",
             hex::encode(observable_hash)
         );
+        let analysis_result = factory_deps.get(&hash).unwrap_or_else(|| {
+            panic!(
+                "bytecode info hash not found in factory deps: 0x{}",
+                hex::encode(hash.as_slice())
+            )
+        });
+        assert_eq!(hash, analysis_result.bytecode_hash);
         Self {
             hash,
             len,
             observable_hash,
+            hash_with_artifacts: analysis_result.hash_with_artifacts,
+            artifacts_len: analysis_result.artifacts_len,
         }
     }
 }
