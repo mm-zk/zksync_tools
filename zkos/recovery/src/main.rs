@@ -3,13 +3,14 @@ use std::{collections::HashMap, str::FromStr};
 use alloy::{
     consensus::Transaction,
     dyn_abi::SolType,
-    primitives::{Address, B256, U256},
+    primitives::{Address, B256, U256, address},
     providers::{Provider, ProviderBuilder},
     rpc::types::Filter,
     sol,
     sol_types::{SolCall, SolEvent}, // for ABI-safe decoding of the commit function
 };
 use anyhow::{Context, Result, bail};
+use blake2::{Blake2s256, Digest};
 use clap::Parser;
 use zk_os_basic_system::system_implementation::flat_storage_model::AccountProperties;
 
@@ -33,6 +34,52 @@ sol! {
     );
     event BlockCommit(uint256 indexed batchNumber, bytes32 indexed batchHash, bytes32 indexed commitment);
 
+
+    struct L2CanonicalTransaction {
+        uint256 txType;
+        uint256 from;
+        uint256 to;
+        uint256 gasLimit;
+        uint256 gasPerPubdataByteLimit;
+        uint256 maxFeePerGas;
+        uint256 maxPriorityFeePerGas;
+        uint256 paymaster;
+        uint256 nonce;
+        uint256 value;
+        // In the future, we might want to add some
+        // new fields to the struct. The `txData` struct
+        // is to be passed to account and any changes to its structure
+        // would mean a breaking change to these accounts. To prevent this,
+        // we should keep some fields as "reserved"
+        // It is also recommended that their length is fixed, since
+        // it would allow easier proof integration (in case we will need
+        // some special circuit for preprocessing transactions)
+        uint256[4] reserved;
+        bytes data;
+        bytes signature;
+        uint256[] factoryDeps;
+        bytes paymasterInput;
+        // Reserved dynamic type for the future use-case. Using it should be avoided,
+        // But it is still here, just in case we want to enable some additional functionality
+        bytes reservedDynamic;
+    }
+
+    event NewPriorityRequest(
+        uint256 txId,
+        bytes32 txHash,
+        uint64 expirationTimestamp,
+        L2CanonicalTransaction transaction,
+        bytes[] factoryDeps
+    );
+
+    event GenesisUpgrade(
+        address indexed _zkChain,
+        L2CanonicalTransaction _l2Transaction,
+        uint256 indexed _protocolVersion,
+        bytes[] _factoryDeps
+    );
+
+    #[derive(Debug)]
     struct StoredBatchInfo {
         uint64 batchNumber;
         bytes32 batchHash;
@@ -45,6 +92,7 @@ sol! {
         bytes32 commitment;
     }
 
+    #[derive(Debug)]
     struct CommitBatchInfoZKsyncOS {
         uint64 batchNumber;
         bytes32 newStateCommitment;
@@ -62,6 +110,54 @@ sol! {
 
     // A dummy function that takes the same parameters we encoded.
     function __decodeParams(StoredBatchInfo, CommitBatchInfoZKsyncOS[]);
+
+
+    // Stuff needed for genesis upgrade tx decoding
+    function upgrade(address delegateTo, bytes _calldata);
+    function genesisUpgrade(
+        bool _isZKsyncOS,
+        uint256 _chainId,
+        address _ctmDeployer,
+        bytes calldata _fixedForceDeploymentsData,
+        bytes calldata _additionalForceDeploymentsData
+    );
+
+    #[derive(Debug)]
+    struct FixedForceDeploymentsData {
+        uint256 l1ChainId;
+        uint256 eraChainId;
+        address l1AssetRouter;
+        bytes32 l2TokenProxyBytecodeHash;
+        address aliasedL1Governance;
+        uint256 maxNumberOfZKChains;
+        bytes bridgehubBytecodeInfo;
+        bytes l2AssetRouterBytecodeInfo;
+        bytes l2NtvBytecodeInfo;
+        bytes messageRootBytecodeInfo;
+        bytes chainAssetHandlerBytecodeInfo;
+        bytes beaconDeployerInfo;
+        address l2SharedBridgeLegacyImpl;
+        address l2BridgedStandardERC20Impl;
+        // The forced beacon address. It is needed only for internal testing.
+        // MUST be equal to 0 in production.
+        // It will be the job of the governance to ensure that this value is set correctly.
+        address dangerousTestOnlyForcedBeacon;
+    }
+
+
+    #[derive(Debug)]
+    struct ZKChainSpecificForceDeploymentsData {
+        bytes32 baseTokenAssetId;
+        address l2LegacySharedBridge;
+        address predeployedL2WethAddress;
+        address baseTokenL1Address;
+        /// @dev Some info about the base token, it is
+        /// needed to deploy weth token in case it is not present
+        string baseTokenName;
+        string baseTokenSymbol;
+    }
+
+
 
 }
 
@@ -132,15 +228,26 @@ async fn main() -> Result<()> {
 
     let mut start = from;
 
+    let mut genesis_local_info = None;
+
     let mut full_results = HashMap::new();
     while start <= to {
         let end = (start + args.chunk - 1).min(to);
         //scan_range(&provider, target, start, end, args.decode_commit).await?;
         let scan_results = scan_commits_via_logs(&provider, target, start, end).await?;
+
+        scan_priority_requests(&provider, target, start, end).await?;
+        let is_genesis = scan_genesis_upgrade(&provider, target, start, end).await?;
+        if let Some(genesis) = is_genesis {
+            genesis_local_info = Some(genesis);
+        }
+
         full_results.extend(scan_results);
         start = end.saturating_add(1);
     }
     eprintln!("Scanned {} batches", full_results.len());
+
+    let genesis_local_info = genesis_local_info.unwrap();
 
     // get sorted keys from full_results
     let mut batch_numbers: Vec<u64> = full_results.keys().cloned().collect();
@@ -150,7 +257,22 @@ async fn main() -> Result<()> {
 
         println!("Batch {}: {:?}", batch_number, info.batch_hash);
 
-        apply_batch(&mut tree, &mut preimage_store, info);
+        apply_batch(&mut tree, &mut preimage_store, info, &genesis_local_info);
+
+        println!(
+            "Tree root: 0x{}",
+            hex::encode(tree.compute_root().as_slice())
+        );
+        println!("Leaves: {}", tree.leaves.len());
+        //println!("0th commit info: {:?}", info.commits[0]);
+
+        for leaf in tree.leaves.iter() {
+            println!(
+                "  0x{} => 0x{}",
+                hex::encode(leaf.key.as_slice()),
+                hex::encode(leaf.value.as_slice())
+            );
+        }
     }
 
     Ok(())
@@ -256,6 +378,201 @@ async fn scan_commits_via_logs<P: Provider + Clone>(
     }
 
     Ok(results)
+}
+
+async fn scan_priority_requests<P: Provider + Clone>(
+    provider: &P,
+    address: Address,
+    from: u64,
+    to: u64,
+) -> Result<HashMap<u64, BatchInfo>> {
+    // Build a filter: address + topic0 = event signature. Indexed params (batchNumber, batchHash, commitment)
+    // can also be filtered later via `topic1/2/3` if needed.
+    let filter = Filter::new()
+        .address(address)
+        .event_signature(NewPriorityRequest::SIGNATURE_HASH)
+        .from_block(from)
+        .to_block(to);
+
+    // Fetch all matching logs.
+    let logs = provider
+        .get_logs(&filter)
+        .await
+        .context("get_logs(NewPriorityRequest)")?;
+
+    let mut results = HashMap::new();
+
+    for lg in logs {
+        // Each log belongs to a tx; pull its calldata using the tx hash.
+        let tx_hash: B256 = lg.transaction_hash.context("log missing tx hash")?;
+        let tx = provider
+            .get_transaction_by_hash(tx_hash)
+            .await
+            .with_context(|| format!("get_tx {}", tx_hash))?;
+        let Some(tx) = tx else { continue };
+
+        // Decode the event (topics+data) using the generated type.
+        // Convert the RPC log into the primitives Log expected by the SolEvent decoder.
+        let prim_log = alloy::primitives::Log {
+            address: lg.address(),
+            data: lg.data().clone(), /*data: alloy::primitives::LogData:::new_unchecked(
+                                         lg.topics().clone().into(),
+                                         lg.data().clone(),
+                                     ),*/
+        };
+        if let Ok(ev) = NewPriorityRequest::decode_log(&prim_log) {
+            println!(
+                "NewPriorityRequest: txType={} txId={} txHash=0x{} expiration={} from=0x{} to=0x{} nonce={} value={} data_len={} factoryDeps={} data={} internal_deps={}",
+                ev.transaction.txType,
+                ev.txId,
+                hex::encode(ev.txHash.as_slice()),
+                ev.expirationTimestamp,
+                hex::encode(ev.transaction.from.to_be_bytes_vec()),
+                hex::encode(ev.transaction.to.to_be_bytes_vec()),
+                ev.transaction.nonce,
+                ev.transaction.value,
+                ev.transaction.data.len(),
+                ev.factoryDeps.len(),
+                hex::encode(ev.transaction.data.clone()),
+                ev.transaction.factoryDeps.len(),
+            );
+        }
+    }
+
+    Ok(results)
+}
+
+#[derive(Default)]
+pub struct GenesisUpgradeLocalInfo {
+    pub force_deploy_info: HashMap<Address, BytecodeInfo>,
+}
+
+async fn scan_genesis_upgrade<P: Provider + Clone>(
+    provider: &P,
+    address: Address,
+    from: u64,
+    to: u64,
+) -> Result<Option<GenesisUpgradeLocalInfo>> {
+    let filter = Filter::new()
+        .address(address)
+        .event_signature(GenesisUpgrade::SIGNATURE_HASH)
+        .from_block(from)
+        .to_block(to);
+
+    // Fetch all matching logs.
+    let logs = provider
+        .get_logs(&filter)
+        .await
+        .context("get_logs(NewPriorityRequest)")?;
+
+    let mut results = None;
+
+    for lg in logs {
+        // Decode the event (topics+data) using the generated type.
+        // Convert the RPC log into the primitives Log expected by the SolEvent decoder.
+        let prim_log = alloy::primitives::Log {
+            address: lg.address(),
+            data: lg.data().clone(), /*data: alloy::primitives::LogData:::new_unchecked(
+                                         lg.topics().clone().into(),
+                                         lg.data().clone(),
+                                     ),*/
+        };
+        if let Ok(ev) = GenesisUpgrade::decode_log(&prim_log) {
+            println!(
+                "GenesisUpgrade: zkChain=0x{} protocolVersion={} txType={} from=0x{} to=0x{} nonce={} value={} data_len={} factoryDeps={} internal_deps={}",
+                hex::encode(ev._zkChain.as_slice()),
+                ev._protocolVersion,
+                ev._l2Transaction.txType,
+                hex::encode(ev._l2Transaction.from.to_be_bytes_vec()),
+                hex::encode(ev._l2Transaction.to.to_be_bytes_vec()),
+                ev._l2Transaction.nonce,
+                ev._l2Transaction.value,
+                ev._l2Transaction.data.len(),
+                ev._l2Transaction.factoryDeps.len(),
+                ev._factoryDeps.len(),
+            );
+
+            // Now a bunch of hacks, to decode the actual L2 tx and preimages.
+            let upgrade = upgradeCall::abi_decode(&ev._l2Transaction.data).unwrap();
+            println!(
+                "updated calldata len: {} full: {}",
+                upgrade._calldata.len(),
+                hex::encode(&upgrade._calldata)
+            );
+
+            let genesis_upgrade = genesisUpgradeCall::abi_decode(&upgrade._calldata).unwrap();
+
+            println!(
+                "genesisUpgrade: isZKsyncOS={} chainId={} ctmDeployer=0x{} fixedForceDeploymentsData_len={} additionalForceDeploymentsData_len={}",
+                genesis_upgrade._isZKsyncOS,
+                genesis_upgrade._chainId,
+                hex::encode(genesis_upgrade._ctmDeployer.as_slice()),
+                genesis_upgrade._fixedForceDeploymentsData.len(),
+                genesis_upgrade._additionalForceDeploymentsData.len(),
+            );
+
+            let fixed_deployment_data =
+                FixedForceDeploymentsData::abi_decode(&genesis_upgrade._fixedForceDeploymentsData)
+                    .unwrap();
+
+            println!("Fixed deployment full info {:#?}", fixed_deployment_data);
+
+            let zkchain_deployment_data = ZKChainSpecificForceDeploymentsData::abi_decode(
+                &genesis_upgrade._additionalForceDeploymentsData,
+            )
+            .unwrap();
+
+            println!(
+                "ZKChain-specific deployment full info {:#?}",
+                zkchain_deployment_data
+            );
+
+            // and now the hacky part begins.
+            let bridgehub_info = BytecodeInfo::parse(&fixed_deployment_data.bridgehubBytecodeInfo);
+            let bridgehub_address = address!("0000000000000000000000000000000000010002");
+
+            println!("bridgehub info {:#?}", bridgehub_info);
+
+            let mut result = GenesisUpgradeLocalInfo::default();
+
+            result
+                .force_deploy_info
+                .insert(bridgehub_address, bridgehub_info);
+
+            results = Some(result);
+        }
+    }
+
+    Ok(results)
+}
+
+#[derive(Debug)]
+pub struct BytecodeInfo {
+    pub hash: B256,
+    pub len: U256,
+    pub observable_hash: B256,
+}
+
+impl BytecodeInfo {
+    pub fn parse(bytecode_info: &[u8]) -> Self {
+        if bytecode_info.len() != 96 {
+            panic!("bytecode info wrong length: {}", bytecode_info.len());
+        }
+        let hash = B256::try_from(&bytecode_info[0..32]).unwrap();
+        let len = U256::from_be_slice(&bytecode_info[32..64]);
+        let observable_hash = B256::try_from(&bytecode_info[64..96]).unwrap();
+        eprintln!("bytecode info hash: 0x{}", hex::encode(hash));
+        eprintln!("bytecode info len: {}", len);
+        eprintln!(
+            "bytecode info observable hash: 0x{}",
+            hex::encode(observable_hash)
+        );
+        Self {
+            hash,
+            len,
+            observable_hash,
+        }
+    }
 }
 
 pub fn parse_da_input(input: &[u8]) -> Result<(Vec<StateDiff>, Vec<statediffs::Log>)> {
@@ -448,14 +765,49 @@ on 'finish' we push current block hash.
 
 */
 
+pub fn address_to_b256(address: &Address) -> B256 {
+    let mut extended_address = [0u8; 32];
+    extended_address[12..].copy_from_slice(&address.0.0);
+    B256::from(extended_address)
+}
+
+pub fn derive_properties_storage_address(address: &Address) -> B256 {
+    let account_properties_address = address!("0000000000000000000000000000000000008003");
+
+    let mut hasher = Blake2s256::new();
+    hasher.update(address_to_b256(&account_properties_address));
+    hasher.update(address_to_b256(address));
+
+    let hash = hasher.finalize();
+    B256::from_slice(&hash)
+}
+
 pub fn apply_batch(
     tree: &mut LocalTree,
     preimage_store: &mut HashMap<B256, Vec<u8>>,
     info: &BatchInfo,
+    genesis_info: &GenesisUpgradeLocalInfo, // In future, this should also cover upgraded and l1 tx.
 ) {
+    let mut force_deploy_map = HashMap::new();
+    // Change force deploy info into derived key.
+    for (addr, bytecode_info) in &genesis_info.force_deploy_info {
+        let derived_key = derive_properties_storage_address(addr);
+
+        println!(
+            "Applying force-deploy for addr 0x{} at key 0x{:x}",
+            hex::encode(addr.as_slice()),
+            derived_key
+        );
+        force_deploy_map.insert(derived_key, bytecode_info.clone());
+    }
+
     for diff in &info.state_diffs {
         match diff.value {
             statediffs::StateDiffValue::AccountProperties(ref ap) => {
+                println!(
+                    "XXXX  Applying AccountProperties diff for key 0x{:x}",
+                    diff.derived_key
+                );
                 println!("**AccountProperties diff: {:#?}", ap);
                 let account_hash = tree.get_value(diff.derived_key);
                 println!("**account hash: {:#x}", account_hash);
@@ -472,9 +824,16 @@ pub fn apply_batch(
                             .unwrap(),
                     )
                 };
-                let properties = ap.update_itself(properties);
+                let properties =
+                    ap.update_itself(properties, force_deploy_map.get(&diff.derived_key));
 
                 println!("**new account properties: {:#?}", properties);
+                let properties_hash = properties.compute_hash();
+                preimage_store.insert(
+                    properties_hash.as_u8_array().into(),
+                    properties.encoding().to_vec(),
+                );
+                tree.add_entry(diff.derived_key, properties_hash.as_u8_array().into());
             }
             statediffs::StateDiffValue::Value(ref v) => {
                 apply_value_diff(tree, diff.derived_key, v);

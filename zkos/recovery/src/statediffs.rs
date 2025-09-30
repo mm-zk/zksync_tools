@@ -7,6 +7,8 @@ use zk_os_basic_system::system_implementation::flat_storage_model::{
     AccountProperties, VersioningData,
 };
 
+use crate::BytecodeInfo;
+
 #[derive(Debug)]
 pub struct StateDiff {
     pub derived_key: B256,
@@ -208,7 +210,11 @@ impl AccountPropertiesDiff {
         )
     }
 
-    pub fn update_itself(&self, old: AccountProperties) -> AccountProperties {
+    pub fn update_itself(
+        &self,
+        old: AccountProperties,
+        force_bytecode_info: Option<&&BytecodeInfo>,
+    ) -> AccountProperties {
         let mut result = old.clone();
         if let Some(nonce_diff) = &self.nonce {
             let nonce_before = U256::from(result.nonce);
