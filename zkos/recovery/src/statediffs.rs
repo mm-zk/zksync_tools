@@ -1,6 +1,6 @@
 use alloy::{
     consensus::Account,
-    primitives::{Address, B160, B256, U256},
+    primitives::{Address, B160, B256, Keccak256, U256},
 };
 use blake2::{Blake2s256, Digest};
 use zk_os_basic_system::system_implementation::flat_storage_model::{
@@ -89,6 +89,12 @@ impl StateDiffValue {
             (offset, Self::Value(value))
         }
     }
+}
+
+pub fn keccak_digest(data: &[u8]) -> B256 {
+    let mut keccak = Keccak256::new();
+    keccak.update(data);
+    keccak.finalize()
 }
 
 impl AccountPropertiesDiff {
@@ -189,8 +195,7 @@ impl AccountPropertiesDiff {
             if let Some(bytecode) = bytecode {
                 let observable_len = observable_bytecode_len.unwrap() as usize;
                 let observable_bytecode = &bytecode[..observable_len];
-                observable_bytecode_hash =
-                    Some(B256::from_slice(&Blake2s256::digest(observable_bytecode)));
+                observable_bytecode_hash = Some(keccak_digest(observable_bytecode));
             }
         }
 
