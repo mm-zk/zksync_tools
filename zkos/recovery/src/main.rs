@@ -537,19 +537,62 @@ async fn scan_genesis_upgrade<P: Provider + Clone>(
             );
 
             // and now the hacky part begins.
+
+            let mut result = GenesisUpgradeLocalInfo::default();
+
             let bridgehub_info = BytecodeInfo::parse(
                 &fixed_deployment_data.bridgehubBytecodeInfo,
                 &factory_deps_analyzed,
             );
             let bridgehub_address = address!("0000000000000000000000000000000000010002");
 
-            println!("bridgehub info {:#?}", bridgehub_info);
-
-            let mut result = GenesisUpgradeLocalInfo::default();
-
             result
                 .force_deploy_info
                 .insert(bridgehub_address, bridgehub_info);
+
+            let l2_asset_router_info = BytecodeInfo::parse(
+                &fixed_deployment_data.l2AssetRouterBytecodeInfo,
+                &factory_deps_analyzed,
+            );
+            let l2_asset_router_address = address!("0000000000000000000000000000000000010003");
+
+            result
+                .force_deploy_info
+                .insert(l2_asset_router_address, l2_asset_router_info);
+
+            let l2_ntv_info = BytecodeInfo::parse(
+                &fixed_deployment_data.l2NtvBytecodeInfo,
+                &factory_deps_analyzed,
+            );
+            let l2_ntv_address = address!("0000000000000000000000000000000000010004");
+            result.force_deploy_info.insert(l2_ntv_address, l2_ntv_info);
+
+            let message_root_info = BytecodeInfo::parse(
+                &fixed_deployment_data.messageRootBytecodeInfo,
+                &factory_deps_analyzed,
+            );
+            let message_root_address = address!("0000000000000000000000000000000000010005");
+            result
+                .force_deploy_info
+                .insert(message_root_address, message_root_info);
+
+            let chain_asset_handler_info = BytecodeInfo::parse(
+                &fixed_deployment_data.chainAssetHandlerBytecodeInfo,
+                &factory_deps_analyzed,
+            );
+            let chain_asset_handler_address = address!("000000000000000000000000000000000001000a");
+            result
+                .force_deploy_info
+                .insert(chain_asset_handler_address, chain_asset_handler_info);
+
+            let beacon_deployer_info = BytecodeInfo::parse(
+                &fixed_deployment_data.beaconDeployerInfo,
+                &factory_deps_analyzed,
+            );
+            let beacon_deployer_address = address!("000000000000000000000000000000000001000b");
+            result
+                .force_deploy_info
+                .insert(beacon_deployer_address, beacon_deployer_info);
 
             results = Some(result);
         }
