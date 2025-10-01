@@ -13,12 +13,11 @@ use blake2::{Blake2s256, Digest};
 use clap::Parser;
 use tracing::level_filters::LevelFilter;
 use tracing_subscriber::EnvFilter;
-use zk_os_basic_system::system_implementation::flat_storage_model::AccountProperties;
 
 use crate::{
-    chain_genesis::{GenesisUpgradeLocalInfo, get_genesis_upgrade},
+    chain_genesis::get_genesis_upgrade,
     deploy::BytecodeAnalysisResults,
-    state::{LocalTree, init_tree_genesis},
+    state::{BlockchainState, LocalTree},
     state_genesis::init_genesis,
     statediffs::{StateDiff, ValueDiff},
 };
@@ -170,15 +169,15 @@ sol! {
 
 #[derive(Debug, Parser)]
 #[command(
-    name = "l1-commit-scraper",
-    about = "Scan Ethereum L1 and extract calldata for calls to a contract"
+    name = "l1-recovery",
+    about = "Scan Ethereum L1 and recover zkSync chain state"
 )]
 struct Args {
     /// Ethereum RPC URL (archive preferred)
     #[arg(long)]
     rpc: String,
 
-    /// Target contract address (0x...)
+    /// Diamond Proxy address of the zkSync chain.
     #[arg(long)]
     address: String,
 
@@ -193,10 +192,6 @@ struct Args {
     /// Chunk size (number of blocks per request)
     #[arg(long, default_value_t = 2_000u64)]
     chunk: u64,
-
-    /// If set, attempt to decode inputs as commitBatchesSharedBridge
-    #[arg(long, default_value_t = true)]
-    decode_commit: bool,
 }
 
 #[tokio::main]
@@ -210,11 +205,8 @@ async fn main() -> Result<()> {
         .init();
     let args = Args::parse();
 
+    // Load genesis from file.
     let genesis = init_genesis();
-
-    let mut tree = init_tree_genesis(&genesis);
-
-    let mut preimage_store = HashMap::from_iter(genesis.preimages.iter().cloned());
 
     let provider = ProviderBuilder::new().connect_http(args.rpc.parse()?);
 
@@ -240,9 +232,14 @@ async fn main() -> Result<()> {
         args.rpc
     );
 
-    let mut start = from;
+    // First - try to find genesis upgrade event (should be somewhere at the beginning).
+    let genesis_local_info = get_genesis_upgrade(&provider, target, from, to, args.chunk).await?;
 
-    let mut full_results = HashMap::new();
+    // Now we can create initial blockchain state.
+    let mut blockchain_state = BlockchainState::new(genesis.clone(), genesis_local_info);
+
+    // Then start scanning for 'CommitBatches' call, and collecting the state.
+    let mut start = from;
     let chunks_total = (to - from) / args.chunk + 1;
     tracing::debug!("Total chunks to scan: {}", chunks_total);
     let mut chunks_done = 0;
@@ -252,91 +249,24 @@ async fn main() -> Result<()> {
             tracing::debug!("Progress: {}/{} chunks done", chunks_done, chunks_total);
         }
         let end = (start + args.chunk - 1).min(to);
-        let scan_results = scan_commits_via_logs(&provider, target, start, end).await?;
-        full_results.extend(scan_results);
+        let scan_results = get_commit_batches_from_range(&provider, target, start, end).await?;
+
+        let mut batch_numbers = scan_results.keys().cloned().collect::<Vec<_>>();
+        batch_numbers.sort_unstable();
+
+        for batch_number in batch_numbers {
+            let batch_info = scan_results.get(&batch_number).unwrap();
+            blockchain_state.apply_batch(batch_number, batch_info);
+        }
+
         start = end.saturating_add(1);
-    }
-    tracing::debug!("Scanned {} batches", full_results.len());
-
-    let genesis_local_info = get_genesis_upgrade(&provider, target, from, to, args.chunk).await?;
-
-    // get sorted keys from full_results
-    let mut batch_numbers: Vec<u64> = full_results.keys().cloned().collect();
-    batch_numbers.sort_unstable();
-    let mut last_256_block_hashes = [B256::default(); 256];
-    last_256_block_hashes[255] = genesis.header.hash_slow();
-    let mut block_number = 0u64;
-
-    for batch_number in &batch_numbers {
-        let info = full_results.get(&batch_number).unwrap();
-
-        tracing::debug!("Batch {}: {:?}", batch_number, info.batch_hash);
-
-        assert_eq!(1, info.commits.len());
-        let commit = &info.commits[0];
-
-        for block_info in &info.blocks_data {
-            tracing::debug!(
-                "  Block: 0x{} with {} state diffs and {} logs",
-                hex::encode(block_info.block_hash.as_slice()),
-                block_info.state_diffs.len(),
-                block_info.logs.len()
-            );
-            apply_batch(
-                &mut tree,
-                &mut preimage_store,
-                block_info,
-                &genesis_local_info,
-            );
-            for i in 0..255 {
-                last_256_block_hashes[i] = last_256_block_hashes[i + 1];
-            }
-
-            last_256_block_hashes[255] = block_info.block_hash;
-            block_number += 1;
-        }
-
-        let tree_root = tree.compute_root();
-        let leaf_count: u64 = tree.leaves.len() as u64;
-
-        tracing::debug!("Tree root: 0x{}", hex::encode(tree_root));
-
-        tracing::debug!(
-            "Expected state commitment: 0x{}",
-            hex::encode(commit.newStateCommitment.as_slice())
-        );
-        let mut hasher = Blake2s256::new();
-        hasher.update(tree_root.as_slice());
-        hasher.update(leaf_count.to_be_bytes());
-        hasher.update(block_number.to_be_bytes());
-        tracing::debug!("Block number used: {}", block_number);
-
-        let mut blocks_hasher = Blake2s256::new();
-        for h in last_256_block_hashes.iter() {
-            blocks_hasher.update(h.as_slice());
-        }
-        let last_256_block_hashes_blake = blocks_hasher.finalize();
-        hasher.update(last_256_block_hashes_blake);
-        // TODO: shoudl this be first or last?
-        hasher.update(commit.lastBlockTimestamp.to_be_bytes());
-        tracing::debug!("Block timestamp used: {}", commit.lastBlockTimestamp);
-        let state_commitment = B256::from_slice(&hasher.finalize());
-        tracing::debug!(
-            "Computed state commitment: 0x{}",
-            hex::encode(state_commitment)
-        );
-
-        assert_eq!(
-            commit.newStateCommitment, state_commitment,
-            "State commitment mismatch"
-        );
     }
 
     tracing::info!(
         "All {} batches and {} blocks applied successfully, final tree root: 0x{}",
-        batch_numbers.len(),
-        block_number,
-        hex::encode(tree.compute_root())
+        blockchain_state.current_batch,
+        blockchain_state.current_block,
+        hex::encode(blockchain_state.tree.compute_root())
     );
 
     Ok(())
@@ -359,7 +289,7 @@ pub struct BlockInfo {
     pub logs: Vec<statediffs::Log>,
 }
 
-async fn scan_commits_via_logs<P: Provider + Clone>(
+async fn get_commit_batches_from_range<P: Provider + Clone>(
     provider: &P,
     address: Address,
     from: u64,
@@ -446,16 +376,20 @@ async fn scan_commits_via_logs<P: Provider + Clone>(
     Ok(results)
 }
 
-#[derive(Debug)]
+/// Bytecode information - covering both hashes, length, and artifacts.
+// This is used for deployed bytecodes only.
+#[derive(Debug, Clone)]
 pub struct BytecodeInfo {
+    /// Blake2s hash of bytecode.
     pub hash: B256,
+    /// Length of bytecode + padding + artifacts.
     pub len: U256,
-    // not sure what that is..
+    // Keccak hash of bytecode itself.
     pub observable_hash: B256,
-
+    /// Blake2s hash of bytecode + padding + artifacts.
     pub hash_with_artifacts: B256,
+    // Length of artifacts only.
     pub artifacts_len: usize,
-    // we'll probably have to add bytecodes too.
 }
 
 impl BytecodeInfo {
@@ -653,66 +587,6 @@ pub fn derive_properties_storage_address(address: &Address) -> B256 {
 
     let hash = hasher.finalize();
     B256::from_slice(&hash)
-}
-
-pub fn apply_batch(
-    tree: &mut LocalTree,
-    preimage_store: &mut HashMap<B256, Vec<u8>>,
-    info: &BlockInfo,
-    genesis_info: &GenesisUpgradeLocalInfo, // In future, this should also cover upgraded and l1 tx.
-) {
-    let mut force_deploy_map = HashMap::new();
-    // Change force deploy info into derived key.
-    for (addr, bytecode_info) in &genesis_info.force_deploy_info {
-        let derived_key = derive_properties_storage_address(addr);
-
-        tracing::trace!(
-            "Applying force-deploy for addr 0x{} at key 0x{:x}",
-            hex::encode(addr.as_slice()),
-            derived_key
-        );
-        force_deploy_map.insert(derived_key, bytecode_info);
-    }
-
-    for diff in &info.state_diffs {
-        match diff.value {
-            statediffs::StateDiffValue::AccountProperties(ref ap) => {
-                tracing::debug!(
-                    "Applying AccountProperties diff for key 0x{:x}",
-                    diff.derived_key
-                );
-                tracing::trace!("**AccountProperties diff: {:#?}", ap);
-                let account_hash = tree.get_value(diff.derived_key);
-                tracing::debug!("**account hash: {:#x}", account_hash);
-
-                let properties = if account_hash.is_zero() {
-                    AccountProperties::default()
-                } else {
-                    AccountProperties::decode(
-                        &preimage_store
-                            .get(&account_hash)
-                            .unwrap()
-                            .clone()
-                            .try_into()
-                            .unwrap(),
-                    )
-                };
-                let properties =
-                    ap.update_itself(properties, force_deploy_map.get(&diff.derived_key));
-
-                tracing::trace!("**new account properties: {:#?}", properties);
-                let properties_hash = properties.compute_hash();
-                preimage_store.insert(
-                    properties_hash.as_u8_array().into(),
-                    properties.encoding().to_vec(),
-                );
-                tree.add_entry(diff.derived_key, properties_hash.as_u8_array().into());
-            }
-            statediffs::StateDiffValue::Value(ref v) => {
-                apply_value_diff(tree, diff.derived_key, v);
-            }
-        }
-    }
 }
 
 pub fn u256_to_b256(value: &U256) -> B256 {

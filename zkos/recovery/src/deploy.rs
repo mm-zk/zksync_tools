@@ -60,14 +60,21 @@ fn find_jumpdest(code: &[u8]) -> BitMap {
 }
 
 pub struct BytecodeAnalysisResults {
+    /// Blake2s hash of the original bytecode.
     pub bytecode_hash: B256,
+    /// Bytecode itself. (deployed bytecode)
     pub bytecode: Vec<u8>,
+    /// Additional data (currently jumpdest map).
     pub artifacts: Vec<u8>,
+    /// Length of artifacts only.
     pub artifacts_len: usize,
+    /// Blake2s hash of bytecode + padding + artifacts.
     pub hash_with_artifacts: B256,
+    /// Bytecode + padding + artifacts.
     pub bytecode_padded_with_artifacts: Vec<u8>,
 }
 
+/// Computes artifacts (jumpdest map) and hashes for the given bytecode,
 pub fn analyze_bytecode(bytecode: &[u8]) -> BytecodeAnalysisResults {
     tracing::debug!("Bytecode analysis:");
     let bytecode_hash = B256::from_slice(&Blake2s256::digest(&bytecode));

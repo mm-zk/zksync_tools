@@ -16,8 +16,9 @@ use crate::{
     deploy::analyze_bytecode, genesisUpgradeCall, upgradeCall,
 };
 
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub struct GenesisUpgradeLocalInfo {
+    /// Bytecodes that were force-deployed as part of the genesis upgrade.
     pub force_deploy_info: HashMap<Address, BytecodeInfo>,
 }
 

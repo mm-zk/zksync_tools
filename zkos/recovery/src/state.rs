@@ -1,10 +1,175 @@
 // Things related with state (tree etc).
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 
 use alloy::primitives::B256;
 use blake2::{Blake2s256, Digest};
+use zk_os_basic_system::system_implementation::flat_storage_model::AccountProperties;
 
-use crate::state_genesis::GenesisState;
+use crate::{
+    BatchInfo, BlockInfo, apply_value_diff, chain_genesis::GenesisUpgradeLocalInfo,
+    derive_properties_storage_address, state_genesis::GenesisState, statediffs,
+};
+/// Struct describing full blockchain state.
+pub struct BlockchainState {
+    pub genesis_tx: GenesisUpgradeLocalInfo,
+    pub tree: LocalTree,
+    pub preimage_store: HashMap<B256, Vec<u8>>,
+    pub current_block: u64,
+    pub current_batch: u64,
+    pub last_256_block_hashes: [B256; 256],
+}
+
+impl BlockchainState {
+    pub fn new(genesis_state: GenesisState, genesis_tx: GenesisUpgradeLocalInfo) -> Self {
+        let tree = init_tree_genesis(&genesis_state);
+
+        let preimage_store = HashMap::from_iter(genesis_state.preimages.iter().cloned());
+
+        let mut last_256_block_hashes = [B256::default(); 256];
+        last_256_block_hashes[255] = genesis_state.header.hash_slow();
+
+        Self {
+            genesis_tx,
+            tree,
+            preimage_store,
+            current_batch: 0,
+            current_block: 0,
+            last_256_block_hashes,
+        }
+    }
+
+    pub fn apply_batch(&mut self, batch_number: u64, info: &BatchInfo) {
+        assert_eq!(batch_number, self.current_batch + 1);
+        self.current_batch = batch_number;
+
+        // For now, only support cases with single batch per commit.
+        assert_eq!(1, info.commits.len());
+        let commit = &info.commits[0];
+        for block_info in &info.blocks_data {
+            self.apply_block(block_info);
+        }
+
+        // Now compute commitments.
+
+        let tree_root = self.tree.compute_root();
+        let leaf_count: u64 = self.tree.leaves.len() as u64;
+
+        tracing::debug!("Tree root: 0x{}", hex::encode(tree_root));
+
+        tracing::debug!(
+            "Expected state commitment: 0x{}",
+            hex::encode(commit.newStateCommitment.as_slice())
+        );
+        let mut hasher = Blake2s256::new();
+        hasher.update(tree_root.as_slice());
+        hasher.update(leaf_count.to_be_bytes());
+        hasher.update(self.current_block.to_be_bytes());
+        tracing::debug!("Block number used: {}", self.current_block);
+
+        let mut blocks_hasher = Blake2s256::new();
+        for h in self.last_256_block_hashes.iter() {
+            blocks_hasher.update(h.as_slice());
+        }
+        let last_256_block_hashes_blake = blocks_hasher.finalize();
+        hasher.update(last_256_block_hashes_blake);
+        // TODO: shoudl this be first or last?
+        hasher.update(commit.lastBlockTimestamp.to_be_bytes());
+        tracing::debug!("Block timestamp used: {}", commit.lastBlockTimestamp);
+        let state_commitment = B256::from_slice(&hasher.finalize());
+        tracing::debug!(
+            "Computed state commitment: 0x{}",
+            hex::encode(state_commitment)
+        );
+
+        // Safety check that commitment matches.
+        assert_eq!(
+            commit.newStateCommitment, state_commitment,
+            "State commitment mismatch"
+        );
+    }
+
+    pub fn apply_block(&mut self, block_info: &BlockInfo) {
+        tracing::debug!(
+            "  Block: 0x{} with {} state diffs and {} logs",
+            hex::encode(block_info.block_hash.as_slice()),
+            block_info.state_diffs.len(),
+            block_info.logs.len()
+        );
+        apply_block_state_diffs(
+            &mut self.tree,
+            &mut self.preimage_store,
+            block_info,
+            &self.genesis_tx,
+        );
+
+        for i in 0..255 {
+            self.last_256_block_hashes[i] = self.last_256_block_hashes[i + 1];
+        }
+
+        self.last_256_block_hashes[255] = block_info.block_hash;
+        self.current_block += 1;
+    }
+}
+
+pub fn apply_block_state_diffs(
+    tree: &mut LocalTree,
+    preimage_store: &mut HashMap<B256, Vec<u8>>,
+    info: &BlockInfo,
+    genesis_info: &GenesisUpgradeLocalInfo, // In future, this should also cover upgraded and l1 tx.
+) {
+    let mut force_deploy_map = HashMap::new();
+    // Change force deploy info into derived key.
+    for (addr, bytecode_info) in &genesis_info.force_deploy_info {
+        let derived_key = derive_properties_storage_address(addr);
+
+        tracing::trace!(
+            "Applying force-deploy for addr 0x{} at key 0x{:x}",
+            hex::encode(addr.as_slice()),
+            derived_key
+        );
+        force_deploy_map.insert(derived_key, bytecode_info);
+    }
+
+    for diff in &info.state_diffs {
+        match diff.value {
+            statediffs::StateDiffValue::AccountProperties(ref ap) => {
+                tracing::debug!(
+                    "Applying AccountProperties diff for key 0x{:x}",
+                    diff.derived_key
+                );
+                tracing::trace!("**AccountProperties diff: {:#?}", ap);
+                let account_hash = tree.get_value(diff.derived_key);
+                tracing::debug!("**account hash: {:#x}", account_hash);
+
+                let properties = if account_hash.is_zero() {
+                    AccountProperties::default()
+                } else {
+                    AccountProperties::decode(
+                        &preimage_store
+                            .get(&account_hash)
+                            .unwrap()
+                            .clone()
+                            .try_into()
+                            .unwrap(),
+                    )
+                };
+                let properties =
+                    ap.update_itself(properties, force_deploy_map.get(&diff.derived_key));
+
+                tracing::trace!("**new account properties: {:#?}", properties);
+                let properties_hash = properties.compute_hash();
+                preimage_store.insert(
+                    properties_hash.as_u8_array().into(),
+                    properties.encoding().to_vec(),
+                );
+                tree.add_entry(diff.derived_key, properties_hash.as_u8_array().into());
+            }
+            statediffs::StateDiffValue::Value(ref v) => {
+                apply_value_diff(tree, diff.derived_key, v);
+            }
+        }
+    }
+}
 
 #[derive(Debug, Clone, Copy, Default)]
 pub struct Leaf {
