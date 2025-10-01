@@ -1,13 +1,15 @@
 // Things related with state (tree etc).
 use std::collections::{BTreeMap, HashMap};
 
-use alloy::primitives::B256;
+use alloy::primitives::{Address, B256, U256, address};
 use blake2::{Blake2s256, Digest};
 use zk_os_basic_system::system_implementation::flat_storage_model::AccountProperties;
 
 use crate::{
-    BatchInfo, BlockInfo, apply_value_diff, chain_genesis::GenesisUpgradeLocalInfo,
-    derive_properties_storage_address, state_genesis::GenesisState, statediffs,
+    BatchInfo, BlockInfo,
+    chain_genesis::GenesisUpgradeLocalInfo,
+    state_genesis::GenesisState,
+    statediffs::{self, ValueDiff},
 };
 /// Struct describing full blockchain state.
 pub struct BlockchainState {
@@ -339,6 +341,54 @@ fn compress(lhs: &B256, rhs: &B256) -> B256 {
     hasher.update(lhs);
     hasher.update(rhs);
     B256::from(<[u8; 32]>::from(hasher.finalize()))
+}
+
+pub fn address_to_b256(address: &Address) -> B256 {
+    let mut extended_address = [0u8; 32];
+    extended_address[12..].copy_from_slice(&address.0.0);
+    B256::from(extended_address)
+}
+
+pub fn derive_properties_storage_address(address: &Address) -> B256 {
+    let account_properties_address = address!("0000000000000000000000000000000000008003");
+
+    let mut hasher = Blake2s256::new();
+    hasher.update(address_to_b256(&account_properties_address));
+    hasher.update(address_to_b256(address));
+
+    let hash = hasher.finalize();
+    B256::from_slice(&hash)
+}
+
+pub fn u256_to_b256(value: &U256) -> B256 {
+    let bytes = value.to_be_bytes();
+
+    B256::from(bytes)
+}
+
+pub fn b256_to_u256(value: &B256) -> U256 {
+    U256::from_be_bytes(value.0)
+}
+
+pub fn apply_value_diff(tree: &mut LocalTree, key: B256, diff: &ValueDiff) {
+    match diff {
+        ValueDiff::Nothing(v) => {
+            tree.add_entry(key, u256_to_b256(v));
+        }
+        ValueDiff::Add(v) => tree.add_entry(
+            key,
+            u256_to_b256(&b256_to_u256(&tree.get_value(key)).wrapping_add(*v)),
+        ),
+        ValueDiff::Sub(v) => {
+            tree.add_entry(
+                key,
+                u256_to_b256(&b256_to_u256(&tree.get_value(key)).wrapping_sub(*v)),
+            );
+        }
+        ValueDiff::Transform(v) => {
+            tree.add_entry(key, u256_to_b256(v));
+        }
+    };
 }
 
 #[cfg(test)]

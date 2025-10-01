@@ -1,10 +1,159 @@
-use alloy::primitives::{Address, B256, Keccak256, U256};
+use alloy::{
+    consensus::Transaction,
+    primitives::{Address, B256, Keccak256, U256},
+    sol_types::SolCall,
+};
+use anyhow::Result;
 use blake2::{Blake2s256, Digest};
 use zk_os_basic_system::system_implementation::flat_storage_model::{
     AccountProperties, VersioningData,
 };
 
-use crate::bytecodes::BytecodeInfo;
+use crate::{
+    __decodeParamsCall, BlockCommit, CommitBatchInfoZKsyncOS, StoredBatchInfo,
+    bytecodes::BytecodeInfo, commitBatchesSharedBridgeCall,
+};
+
+/// Struct describing a single batch.
+pub struct BatchInfo {
+    pub batch_number: u64,
+    pub batch_hash: B256,
+    pub commitment: B256,
+    pub calldata: Vec<u8>,
+    pub stored: StoredBatchInfo,
+    pub commits: Vec<CommitBatchInfoZKsyncOS>,
+    // Block hash, state diffs, logs
+    pub blocks_data: Vec<BlockInfo>,
+}
+
+impl BatchInfo {
+    pub fn parse(
+        log: alloy::primitives::Log<BlockCommit>,
+        tx: alloy::rpc::types::Transaction,
+    ) -> Self {
+        let batch = log.batchNumber;
+        let batch_hash = log.batchHash;
+        let commitment = log.commitment;
+
+        let calldata = tx.input().clone();
+
+        let commit_call = commitBatchesSharedBridgeCall::abi_decode(&calldata).unwrap();
+
+        let commit_data_without_prefix = &commit_call._commitData[1..]; // skip the first byte (version)
+
+        let decode_params = __decodeParamsCall::abi_decode_raw(commit_data_without_prefix).unwrap();
+
+        let (stored, commits) = (decode_params._0, decode_params._1);
+
+        // Currently we only support 1 batch per transaction.
+        assert_eq!(1, commits.len());
+
+        let blocks_data = parse_da_input(&commits[0].operatorDAInput).unwrap();
+
+        let batch_number: u64 = batch.try_into().unwrap();
+
+        Self {
+            batch_number,
+            batch_hash,
+            commitment,
+            calldata: calldata.to_vec(),
+            stored,
+            commits,
+            blocks_data,
+        }
+    }
+}
+
+/// Struct descring a single block.
+pub struct BlockInfo {
+    pub block_hash: B256,
+    pub state_diffs: Vec<StateDiff>,
+    pub logs: Vec<Log>,
+}
+
+impl BlockInfo {
+    /// Reads a single block from a byte stream.
+    pub fn parse_from_stream(input: &[u8]) -> Result<(usize, Self)> {
+        let pubdata = input;
+        tracing::debug!("pubdata len: {}", pubdata.len());
+
+        // now for pubdata itself.
+
+        // First 32 should be some hash.
+        if pubdata.len() < 32 {
+            tracing::error!("pubdata too short for hash: {}", pubdata.len());
+            return Err(anyhow::anyhow!("pubdata too short for hash"));
+        }
+        // This is the 'current_block_hash' from io_subsystem.rs 'finish'
+        let block_header_hash = B256::from_slice(&pubdata[0..32]);
+        tracing::debug!("block header hash: 0x{}", hex::encode(block_header_hash));
+
+        let (state_diff_offset, state_diff) = StateDiff::new_from_stream(&pubdata[32..]);
+
+        let remaining = &pubdata[32 + state_diff_offset as usize..];
+
+        // u32 for logs length
+        if remaining.len() < 4 {
+            tracing::error!("pubdata too short for logs len: {}", remaining.len());
+            return Err(anyhow::anyhow!("pubdata too short for logs len"));
+        }
+        let logs_len = u32::from_be_bytes(
+            remaining[0..4]
+                .try_into()
+                .expect("slice with incorrect length"),
+        );
+        tracing::debug!("pubdata logs len: {}", logs_len);
+
+        let mut offset = 4;
+
+        let mut logs = Vec::new();
+
+        for _ in 0..logs_len {
+            let (consumed, log) = Log::new_from_stream(&remaining[offset..]);
+
+            logs.push(log);
+            offset += consumed as usize;
+        }
+
+        let messages_len: u32 = if remaining.len() < offset + 4 {
+            tracing::error!("pubdata too short for messages len: {}", remaining.len());
+            return Err(anyhow::anyhow!("pubdata too short for messages len"));
+        } else {
+            u32::from_be_bytes(
+                remaining[offset..offset + 4]
+                    .try_into()
+                    .expect("slice with incorrect length"),
+            )
+        };
+        offset += 4;
+
+        tracing::debug!("pubdata messages len: {}", messages_len);
+
+        if messages_len > 0 {
+            for _ in 0..messages_len {
+                let len = u32::from_be_bytes(
+                    remaining[offset..offset + 4]
+                        .try_into()
+                        .expect("slice with incorrect length"),
+                );
+                offset += 4;
+                tracing::trace!("message len: {}", len);
+                offset += len as usize;
+            }
+        }
+
+        tracing::debug!("pubdata remaining len: {}", remaining.len() - offset);
+
+        Ok((
+            offset + 32 + state_diff_offset as usize,
+            Self {
+                block_hash: block_header_hash,
+                state_diffs: state_diff,
+                logs,
+            },
+        ))
+    }
+}
 
 #[derive(Debug)]
 pub struct StateDiff {
@@ -355,4 +504,70 @@ impl Log {
             },
         )
     }
+}
+
+/// Reads DA input (assuming that it uses calldata, not blobs)
+/// and returns block info information.
+pub fn parse_da_input(input: &[u8]) -> Result<Vec<BlockInfo>> {
+    // first 32 bytes should be 0, the next 32 is some keccak.
+    if input.len() < 64 {
+        tracing::error!("DA input too short: {}", input.len());
+        return Err(anyhow::anyhow!("DA input too short"));
+    }
+    // not sure what this prefix is..
+    let prefix = &input[0..32];
+    if prefix.iter().any(|&b| b != 0) {
+        tracing::error!("DA input prefix not zero: {:x?}", prefix);
+        return Err(anyhow::anyhow!("DA input prefix not zero"));
+    }
+
+    let pubdata_hash = &input[32..64];
+    tracing::debug!("pubdata input hash: 0x{}", hex::encode(pubdata_hash));
+    let blob_count = &input[64];
+    // for calldata, blobcount should be 1.
+    tracing::debug!("blob count: {}", blob_count);
+
+    let mut offset = 65;
+    // another 32 bytes that should be 0.
+    if input.len() < offset + 32 {
+        tracing::error!("DA input too short for second zero: {}", input.len());
+        return Err(anyhow::anyhow!("DA input too short for second zero"));
+    }
+    let mid = &input[offset..offset + 32];
+    if mid.iter().any(|&b| b != 0) {
+        tracing::error!("DA input mid not zero: {:x?}", mid);
+        return Err(anyhow::anyhow!("DA input mid not zero"));
+    }
+    offset += 32;
+
+    let calldata_type = &input[offset];
+    tracing::debug!("calldata type: {}", calldata_type);
+    assert_eq!(&0, calldata_type); // we only handle calldata type 0
+
+    offset += 1;
+
+    // remaining bytes:
+
+    let mut results = vec![];
+    loop {
+        tracing::debug!("parsing block {}", results.len());
+        let (consumed, block_info) = BlockInfo::parse_from_stream(&input[offset..])?;
+        tracing::debug!(
+            "offset: {} consumed: {} input len: {}",
+            offset,
+            consumed,
+            input.len()
+        );
+        offset += consumed;
+        results.push(block_info);
+        // Last 32 bytes should be a blob commitment.
+        if offset + 32 >= input.len() {
+            break;
+        }
+    }
+    let blob_commitment = B256::from_slice(&input[offset..offset + 32]);
+    tracing::debug!("blob commitment: {:?}", blob_commitment);
+    assert_eq!(blob_commitment, B256::ZERO);
+
+    Ok(results)
 }
