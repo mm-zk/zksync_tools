@@ -12,9 +12,11 @@ use alloy::{
 use anyhow::{Context, Result};
 
 use crate::{
-    FixedForceDeploymentsData, GenesisUpgrade, ZKChainSpecificForceDeploymentsData,
     bytecodes::{BytecodeInfo, analyze_bytecode},
-    genesisUpgradeCall, upgradeCall,
+    contracts::{
+        FixedForceDeploymentsData, GenesisUpgrade, ZKChainSpecificForceDeploymentsData,
+        genesisUpgradeCall, upgradeCall,
+    },
 };
 
 #[derive(Default, Clone)]

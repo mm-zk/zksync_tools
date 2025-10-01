@@ -10,8 +10,11 @@ use zk_os_basic_system::system_implementation::flat_storage_model::{
 };
 
 use crate::{
-    __decodeParamsCall, BlockCommit, CommitBatchInfoZKsyncOS, StoredBatchInfo,
-    bytecodes::BytecodeInfo, commitBatchesSharedBridgeCall,
+    bytecodes::BytecodeInfo,
+    contracts::{
+        __decodeParamsCall, BlockCommit, CommitBatchInfoZKsyncOS, StoredBatchInfo,
+        commitBatchesSharedBridgeCall,
+    },
 };
 
 /// Struct describing a single batch.
