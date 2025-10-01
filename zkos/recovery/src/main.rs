@@ -16,15 +16,17 @@ use tracing_subscriber::EnvFilter;
 use zk_os_basic_system::system_implementation::flat_storage_model::AccountProperties;
 
 use crate::{
+    chain_genesis::{GenesisUpgradeLocalInfo, get_genesis_upgrade},
     deploy::BytecodeAnalysisResults,
-    genesis::{GenesisUpgradeLocalInfo, get_genesis_upgrade},
-    state::{LocalTree, init_genesis, init_tree_genesis},
+    state::{LocalTree, init_tree_genesis},
+    state_genesis::init_genesis,
     statediffs::{StateDiff, ValueDiff},
 };
 
+pub mod chain_genesis;
 pub mod deploy;
-pub mod genesis;
 pub mod state;
+pub mod state_genesis;
 pub mod statediffs;
 
 // Define the function we care about for optional decoding.
@@ -210,7 +212,7 @@ async fn main() -> Result<()> {
 
     let genesis = init_genesis();
 
-    let mut tree = init_tree_genesis();
+    let mut tree = init_tree_genesis(&genesis);
 
     let mut preimage_store = HashMap::from_iter(genesis.preimages.iter().cloned());
 
