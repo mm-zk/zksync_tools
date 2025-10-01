@@ -2,7 +2,6 @@ use std::{collections::HashMap, str::FromStr};
 
 use alloy::{
     consensus::Transaction,
-    dyn_abi::SolType,
     primitives::{Address, B256, U256, address},
     providers::{Provider, ProviderBuilder},
     rpc::types::Filter,
@@ -17,12 +16,14 @@ use tracing_subscriber::EnvFilter;
 use zk_os_basic_system::system_implementation::flat_storage_model::AccountProperties;
 
 use crate::{
-    deploy::{BytecodeAnalysisResults, analyze_bytecode},
+    deploy::BytecodeAnalysisResults,
+    genesis::{GenesisUpgradeLocalInfo, get_genesis_upgrade},
     state::{LocalTree, init_genesis, init_tree_genesis},
     statediffs::{StateDiff, ValueDiff},
 };
 
 pub mod deploy;
+pub mod genesis;
 pub mod state;
 pub mod statediffs;
 
@@ -239,8 +240,6 @@ async fn main() -> Result<()> {
 
     let mut start = from;
 
-    let mut genesis_local_info = None;
-
     let mut full_results = HashMap::new();
     let chunks_total = (to - from) / args.chunk + 1;
     tracing::debug!("Total chunks to scan: {}", chunks_total);
@@ -251,21 +250,13 @@ async fn main() -> Result<()> {
             tracing::debug!("Progress: {}/{} chunks done", chunks_done, chunks_total);
         }
         let end = (start + args.chunk - 1).min(to);
-        //scan_range(&provider, target, start, end, args.decode_commit).await?;
         let scan_results = scan_commits_via_logs(&provider, target, start, end).await?;
-
-        //scan_priority_requests(&provider, target, start, end).await?;
-        let is_genesis = scan_genesis_upgrade(&provider, target, start, end).await?;
-        if let Some(genesis) = is_genesis {
-            genesis_local_info = Some(genesis);
-        }
-
         full_results.extend(scan_results);
         start = end.saturating_add(1);
     }
     tracing::debug!("Scanned {} batches", full_results.len());
 
-    let genesis_local_info = genesis_local_info.unwrap();
+    let genesis_local_info = get_genesis_upgrade(&provider, target, from, to, args.chunk).await?;
 
     // get sorted keys from full_results
     let mut batch_numbers: Vec<u64> = full_results.keys().cloned().collect();
@@ -447,163 +438,6 @@ async fn scan_commits_via_logs<P: Provider + Clone>(
                     blocks_data,
                 },
             );
-        }
-    }
-
-    Ok(results)
-}
-
-#[derive(Default)]
-pub struct GenesisUpgradeLocalInfo {
-    pub force_deploy_info: HashMap<Address, BytecodeInfo>,
-}
-
-async fn scan_genesis_upgrade<P: Provider + Clone>(
-    provider: &P,
-    address: Address,
-    from: u64,
-    to: u64,
-) -> Result<Option<GenesisUpgradeLocalInfo>> {
-    let filter = Filter::new()
-        .address(address)
-        .event_signature(GenesisUpgrade::SIGNATURE_HASH)
-        .from_block(from)
-        .to_block(to);
-
-    // Fetch all matching logs.
-    let logs = provider
-        .get_logs(&filter)
-        .await
-        .context("get_logs(NewPriorityRequest)")?;
-
-    let mut results = None;
-
-    for lg in logs {
-        // Decode the event (topics+data) using the generated type.
-        // Convert the RPC log into the primitives Log expected by the SolEvent decoder.
-        let prim_log = alloy::primitives::Log {
-            address: lg.address(),
-            data: lg.data().clone(), /*data: alloy::primitives::LogData:::new_unchecked(
-                                         lg.topics().clone().into(),
-                                         lg.data().clone(),
-                                     ),*/
-        };
-        if let Ok(ev) = GenesisUpgrade::decode_log(&prim_log) {
-            tracing::debug!(
-                "GenesisUpgrade: zkChain=0x{} protocolVersion={} txType={} from=0x{} to=0x{} nonce={} value={} data_len={} factoryDeps={} internal_deps={}",
-                hex::encode(ev._zkChain.as_slice()),
-                ev._protocolVersion,
-                ev._l2Transaction.txType,
-                hex::encode(ev._l2Transaction.from.to_be_bytes_vec()),
-                hex::encode(ev._l2Transaction.to.to_be_bytes_vec()),
-                ev._l2Transaction.nonce,
-                ev._l2Transaction.value,
-                ev._l2Transaction.data.len(),
-                ev._l2Transaction.factoryDeps.len(),
-                ev._factoryDeps.len(),
-            );
-
-            let mut factory_deps_analyzed = HashMap::new();
-
-            for dep in ev._factoryDeps.iter() {
-                let analysis_result = analyze_bytecode(&dep);
-                factory_deps_analyzed.insert(analysis_result.bytecode_hash, analysis_result);
-            }
-
-            // Now a bunch of hacks, to decode the actual L2 tx and preimages.
-            let upgrade = upgradeCall::abi_decode(&ev._l2Transaction.data).unwrap();
-            tracing::debug!(
-                "updated calldata len: {} full: {}",
-                upgrade._calldata.len(),
-                hex::encode(&upgrade._calldata)
-            );
-
-            let genesis_upgrade = genesisUpgradeCall::abi_decode(&upgrade._calldata).unwrap();
-
-            tracing::debug!(
-                "genesisUpgrade: isZKsyncOS={} chainId={} ctmDeployer=0x{} fixedForceDeploymentsData_len={} additionalForceDeploymentsData_len={}",
-                genesis_upgrade._isZKsyncOS,
-                genesis_upgrade._chainId,
-                hex::encode(genesis_upgrade._ctmDeployer.as_slice()),
-                genesis_upgrade._fixedForceDeploymentsData.len(),
-                genesis_upgrade._additionalForceDeploymentsData.len(),
-            );
-
-            let fixed_deployment_data =
-                FixedForceDeploymentsData::abi_decode(&genesis_upgrade._fixedForceDeploymentsData)
-                    .unwrap();
-
-            tracing::debug!("Fixed deployment full info {:#?}", fixed_deployment_data);
-
-            let zkchain_deployment_data = ZKChainSpecificForceDeploymentsData::abi_decode(
-                &genesis_upgrade._additionalForceDeploymentsData,
-            )
-            .unwrap();
-
-            tracing::debug!(
-                "ZKChain-specific deployment full info {:#?}",
-                zkchain_deployment_data
-            );
-
-            // and now the hacky part begins.
-
-            let mut result = GenesisUpgradeLocalInfo::default();
-
-            let bridgehub_info = BytecodeInfo::parse(
-                &fixed_deployment_data.bridgehubBytecodeInfo,
-                &factory_deps_analyzed,
-            );
-            let bridgehub_address = address!("0000000000000000000000000000000000010002");
-
-            result
-                .force_deploy_info
-                .insert(bridgehub_address, bridgehub_info);
-
-            let l2_asset_router_info = BytecodeInfo::parse(
-                &fixed_deployment_data.l2AssetRouterBytecodeInfo,
-                &factory_deps_analyzed,
-            );
-            let l2_asset_router_address = address!("0000000000000000000000000000000000010003");
-
-            result
-                .force_deploy_info
-                .insert(l2_asset_router_address, l2_asset_router_info);
-
-            let l2_ntv_info = BytecodeInfo::parse(
-                &fixed_deployment_data.l2NtvBytecodeInfo,
-                &factory_deps_analyzed,
-            );
-            let l2_ntv_address = address!("0000000000000000000000000000000000010004");
-            result.force_deploy_info.insert(l2_ntv_address, l2_ntv_info);
-
-            let message_root_info = BytecodeInfo::parse(
-                &fixed_deployment_data.messageRootBytecodeInfo,
-                &factory_deps_analyzed,
-            );
-            let message_root_address = address!("0000000000000000000000000000000000010005");
-            result
-                .force_deploy_info
-                .insert(message_root_address, message_root_info);
-
-            let chain_asset_handler_info = BytecodeInfo::parse(
-                &fixed_deployment_data.chainAssetHandlerBytecodeInfo,
-                &factory_deps_analyzed,
-            );
-            let chain_asset_handler_address = address!("000000000000000000000000000000000001000a");
-            result
-                .force_deploy_info
-                .insert(chain_asset_handler_address, chain_asset_handler_info);
-
-            let beacon_deployer_info = BytecodeInfo::parse(
-                &fixed_deployment_data.beaconDeployerInfo,
-                &factory_deps_analyzed,
-            );
-            let beacon_deployer_address = address!("000000000000000000000000000000000001000b");
-            result
-                .force_deploy_info
-                .insert(beacon_deployer_address, beacon_deployer_info);
-
-            results = Some(result);
         }
     }
 
