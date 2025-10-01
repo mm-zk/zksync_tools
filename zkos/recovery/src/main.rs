@@ -7,7 +7,7 @@ use alloy::{
     sol_types::SolEvent, // for ABI-safe decoding of the commit function
 };
 use anyhow::{Context, Result, bail};
-use clap::Parser;
+use clap::{Parser, Subcommand};
 use tracing::level_filters::LevelFilter;
 use tracing_subscriber::EnvFilter;
 
@@ -31,7 +31,21 @@ pub mod statediffs;
     name = "l1-recovery",
     about = "Scan Ethereum L1 and recover zkSync chain state"
 )]
-struct Args {
+struct Cli {
+    #[command(subcommand)]
+    command: Command,
+}
+
+#[derive(Debug, Subcommand)]
+
+pub enum Command {
+    /// Recover state from L1, check correctness and optionally write to json file.
+    Recover(RecoverArgs),
+}
+
+#[derive(Debug, Parser)]
+
+pub struct RecoverArgs {
     /// Ethereum RPC URL (archive preferred)
     #[arg(long)]
     rpc: String,
@@ -66,8 +80,15 @@ async fn main() -> Result<()> {
                 .from_env_lossy(),
         )
         .init();
-    let args = Args::parse();
+    let args = Cli::parse();
 
+    match args.command {
+        Command::Recover(args) => run_recover(args).await?,
+    }
+    Ok(())
+}
+
+async fn run_recover(args: RecoverArgs) -> Result<()> {
     // Load genesis from file.
     let genesis = init_genesis();
 

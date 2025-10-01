@@ -2,8 +2,15 @@
 
 Small tool, to recover state just from L1.
 
+```shell
+# Read state from 8545, and save to file.
+# Address has to be diamond proxy address of the given chain.
+cargo run -- recover --rpc http://localhost:8545 --address 0x8FdB49aBc1E2B891D91f64B15aE6A3616c8d8d1e --output some_file.json
+```
 
 
+
+## More info
 Running against local (addresses can change):
 
 
@@ -32,15 +39,14 @@ cast call 0xec68e2cfe53b183125bcaf2888ae5a94bbcc7a4e 'getZKChain(uint256)(addres
 Actually running the tool:
 
 ```shell
-cargo run -- --rpc http://localhost:8545 --address 0x8FdB49aBc1E2B891D91f64B15aE6A3616c8d8d1e
+cargo run -- recover --rpc http://localhost:8545 --address 0x8FdB49aBc1E2B891D91f64B15aE6A3616c8d8d1e
 ```
 
-Checking testnet:
+Checking testnet (specifying to & from blocks):
 
 ```shell
-cargo run -- --rpc SEPOLIA_RPC --address 0x02b1ac1cf0a592aefd3c2246b2431388365db272 --from 9210280 --to 9318536
+cargo run -- recover --rpc SEPOLIA_RPC --address 0x02b1ac1cf0a592aefd3c2246b2431388365db272 --from 9210280 --to 9318536
 ```
-
 
 
 ## TODO
