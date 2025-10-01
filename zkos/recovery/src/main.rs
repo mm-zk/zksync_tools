@@ -267,7 +267,27 @@ async fn main() -> Result<()> {
         assert_eq!(1, info.commits.len());
         let commit = &info.commits[0];
 
-        apply_batch(&mut tree, &mut preimage_store, info, &genesis_local_info);
+        for block_info in &info.blocks_data {
+            println!(
+                "  Block: 0x{} with {} state diffs and {} logs",
+                hex::encode(block_info.block_hash.as_slice()),
+                block_info.state_diffs.len(),
+                block_info.logs.len()
+            );
+            apply_batch(
+                &mut tree,
+                &mut preimage_store,
+                block_info,
+                &genesis_local_info,
+            );
+            for i in 0..255 {
+                last_256_block_hashes[i] = last_256_block_hashes[i + 1];
+            }
+
+            // FIXME: what if we have many blocks in a batch?
+            last_256_block_hashes[255] = block_info.block_hash;
+        }
+
         let tree_root = tree.compute_root();
         let leaf_count: u64 = tree.leaves.len() as u64;
 
@@ -282,13 +302,6 @@ async fn main() -> Result<()> {
         hasher.update(leaf_count.to_be_bytes());
         hasher.update(commit.batchNumber.to_be_bytes());
         println!("Block number used: {}", commit.batchNumber);
-
-        for i in 0..255 {
-            last_256_block_hashes[i] = last_256_block_hashes[i + 1];
-        }
-
-        // FIXME: what if we have many blocks in a batch?
-        last_256_block_hashes[255] = info.block_hash;
 
         let mut blocks_hasher = Blake2s256::new();
         for h in last_256_block_hashes.iter() {
@@ -334,10 +347,14 @@ pub struct BatchInfo {
     pub calldata: Vec<u8>,
     pub stored: StoredBatchInfo,
     pub commits: Vec<CommitBatchInfoZKsyncOS>,
+    // Block hash, state diffs, logs
+    pub blocks_data: Vec<BlockInfo>,
+}
+
+pub struct BlockInfo {
+    pub block_hash: B256,
     pub state_diffs: Vec<StateDiff>,
     pub logs: Vec<statediffs::Log>,
-    // TODO: this should probably be a vector.
-    pub block_hash: B256,
 }
 
 async fn scan_commits_via_logs<P: Provider + Clone>(
@@ -409,7 +426,7 @@ async fn scan_commits_via_logs<P: Provider + Clone>(
             let tmp = &commits[0];
             assert_eq!(1, commits.len());
 
-            let (block_hash, state_diffs, logs) = parse_da_input(&tmp.operatorDAInput).unwrap();
+            let blocks_data = parse_da_input(&tmp.operatorDAInput).unwrap();
 
             let batch_number: u64 = batch.try_into().unwrap();
             results.insert(
@@ -421,9 +438,7 @@ async fn scan_commits_via_logs<P: Provider + Clone>(
                     calldata: calldata.to_vec(),
                     stored,
                     commits,
-                    state_diffs,
-                    logs,
-                    block_hash,
+                    blocks_data,
                 },
             );
         }
@@ -697,7 +712,7 @@ impl BytecodeInfo {
     }
 }
 
-pub fn parse_da_input(input: &[u8]) -> Result<(B256, Vec<StateDiff>, Vec<statediffs::Log>)> {
+pub fn parse_da_input(input: &[u8]) -> Result<Vec<BlockInfo>> {
     // first 32 bytes should be 0, the next 32 is some keccak.
     if input.len() < 64 {
         eprintln!("DA input too short: {}", input.len());
@@ -735,7 +750,38 @@ pub fn parse_da_input(input: &[u8]) -> Result<(B256, Vec<StateDiff>, Vec<statedi
     offset += 1;
 
     // remaining bytes:
-    let pubdata = &input[offset..];
+
+    let mut results = vec![];
+    loop {
+        println!("parsing block {}", results.len());
+        let (consumed, block_header_hash, state_diff, logs) = parse_block_da(&input[offset..])?;
+        println!(
+            "offset: {} consumed: {} input len: {}",
+            offset,
+            consumed,
+            input.len()
+        );
+        offset += consumed;
+        results.push(BlockInfo {
+            block_hash: block_header_hash,
+            state_diffs: state_diff,
+            logs,
+        });
+        // TODO: seems that last 32 bytes are 0s..
+        if offset + 32 >= input.len() {
+            break;
+        }
+    }
+    let last_slot = B256::from_slice(&input[offset..offset + 32]);
+    println!("last slot: {:?}", last_slot);
+    // TODO: what is in the last slot?
+    assert_eq!(last_slot, B256::ZERO);
+
+    Ok(results)
+}
+
+pub fn parse_block_da(input: &[u8]) -> Result<(usize, B256, Vec<StateDiff>, Vec<statediffs::Log>)> {
+    let pubdata = input;
     eprintln!("pubdata len: {}", pubdata.len());
 
     // now for pubdata itself.
@@ -798,13 +844,20 @@ pub fn parse_da_input(input: &[u8]) -> Result<(B256, Vec<StateDiff>, Vec<statedi
     }
 
     println!("pubdata remaining len: {}", remaining.len() - offset);
-    assert_eq!(remaining.len() - offset, 32);
+    //assert_eq!(remaining.len() - offset, 32);
 
-    let last_slot = B256::from_slice(&remaining[offset..offset + 32]);
-    println!("last slot: {:?}", last_slot);
-    assert_eq!(last_slot, B256::ZERO);
+    //let last_slot = B256::from_slice(&remaining[offset..offset + 32]);
+    //println!("last slot: {:?}", last_slot);
+    // TODO: what is in the last slot?
+    //assert_eq!(last_slot, B256::ZERO);
+    //offset += 32;
 
-    Ok((block_header_hash, state_diff, logs))
+    Ok((
+        offset + 32 + state_diff_offset as usize,
+        block_header_hash,
+        state_diff,
+        logs,
+    ))
 }
 
 /*
@@ -907,7 +960,7 @@ pub fn derive_properties_storage_address(address: &Address) -> B256 {
 pub fn apply_batch(
     tree: &mut LocalTree,
     preimage_store: &mut HashMap<B256, Vec<u8>>,
-    info: &BatchInfo,
+    info: &BlockInfo,
     genesis_info: &GenesisUpgradeLocalInfo, // In future, this should also cover upgraded and l1 tx.
 ) {
     let mut force_deploy_map = HashMap::new();
@@ -920,7 +973,7 @@ pub fn apply_batch(
             hex::encode(addr.as_slice()),
             derived_key
         );*/
-        force_deploy_map.insert(derived_key, bytecode_info.clone());
+        force_deploy_map.insert(derived_key, bytecode_info);
     }
 
     for diff in &info.state_diffs {
