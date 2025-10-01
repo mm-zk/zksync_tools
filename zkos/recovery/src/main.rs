@@ -16,14 +16,13 @@ use tracing_subscriber::EnvFilter;
 
 use crate::{
     chain_genesis::get_genesis_upgrade,
-    deploy::BytecodeAnalysisResults,
     state::{BlockchainState, LocalTree},
     state_genesis::init_genesis,
     statediffs::{StateDiff, ValueDiff},
 };
 
+pub mod bytecodes;
 pub mod chain_genesis;
-pub mod deploy;
 pub mod state;
 pub mod state_genesis;
 pub mod statediffs;
@@ -374,56 +373,6 @@ async fn get_commit_batches_from_range<P: Provider + Clone>(
     }
 
     Ok(results)
-}
-
-/// Bytecode information - covering both hashes, length, and artifacts.
-// This is used for deployed bytecodes only.
-#[derive(Debug, Clone)]
-pub struct BytecodeInfo {
-    /// Blake2s hash of bytecode.
-    pub hash: B256,
-    /// Length of bytecode + padding + artifacts.
-    pub len: U256,
-    // Keccak hash of bytecode itself.
-    pub observable_hash: B256,
-    /// Blake2s hash of bytecode + padding + artifacts.
-    pub hash_with_artifacts: B256,
-    // Length of artifacts only.
-    pub artifacts_len: usize,
-}
-
-impl BytecodeInfo {
-    pub fn parse(
-        bytecode_info: &[u8],
-        factory_deps: &HashMap<B256, BytecodeAnalysisResults>,
-    ) -> Self {
-        if bytecode_info.len() != 96 {
-            panic!("bytecode info wrong length: {}", bytecode_info.len());
-        }
-        let hash = B256::try_from(&bytecode_info[0..32]).unwrap();
-        let len = U256::from_be_slice(&bytecode_info[32..64]);
-        let observable_hash = B256::try_from(&bytecode_info[64..96]).unwrap();
-        tracing::debug!("bytecode info hash: 0x{}", hex::encode(hash));
-        tracing::debug!("bytecode info len: {}", len);
-        tracing::debug!(
-            "bytecode info observable hash: 0x{}",
-            hex::encode(observable_hash)
-        );
-        let analysis_result = factory_deps.get(&hash).unwrap_or_else(|| {
-            panic!(
-                "bytecode info hash not found in factory deps: 0x{}",
-                hex::encode(hash.as_slice())
-            )
-        });
-        assert_eq!(hash, analysis_result.bytecode_hash);
-        Self {
-            hash,
-            len,
-            observable_hash,
-            hash_with_artifacts: analysis_result.hash_with_artifacts,
-            artifacts_len: analysis_result.artifacts_len,
-        }
-    }
 }
 
 pub fn parse_da_input(input: &[u8]) -> Result<Vec<BlockInfo>> {

@@ -1,4 +1,6 @@
-use alloy::primitives::B256;
+use std::collections::HashMap;
+
+use alloy::primitives::{B256, U256};
 use blake2::{Blake2s256, Digest};
 use zk_os_basic_system::system_implementation::flat_storage_model::bytecode_padding_len;
 
@@ -111,5 +113,55 @@ pub fn analyze_bytecode(bytecode: &[u8]) -> BytecodeAnalysisResults {
         artifacts_len: artifacts.len(),
         hash_with_artifacts,
         bytecode_padded_with_artifacts,
+    }
+}
+
+/// Bytecode information - covering both hashes, length, and artifacts.
+// This is used for deployed bytecodes only.
+#[derive(Debug, Clone)]
+pub struct BytecodeInfo {
+    /// Blake2s hash of bytecode.
+    pub hash: B256,
+    /// Length of bytecode + padding + artifacts.
+    pub len: U256,
+    // Keccak hash of bytecode itself.
+    pub observable_hash: B256,
+    /// Blake2s hash of bytecode + padding + artifacts.
+    pub hash_with_artifacts: B256,
+    // Length of artifacts only.
+    pub artifacts_len: usize,
+}
+
+impl BytecodeInfo {
+    pub fn parse(
+        bytecode_info: &[u8],
+        factory_deps: &HashMap<B256, BytecodeAnalysisResults>,
+    ) -> Self {
+        if bytecode_info.len() != 96 {
+            panic!("bytecode info wrong length: {}", bytecode_info.len());
+        }
+        let hash = B256::try_from(&bytecode_info[0..32]).unwrap();
+        let len = U256::from_be_slice(&bytecode_info[32..64]);
+        let observable_hash = B256::try_from(&bytecode_info[64..96]).unwrap();
+        tracing::debug!("bytecode info hash: 0x{}", hex::encode(hash));
+        tracing::debug!("bytecode info len: {}", len);
+        tracing::debug!(
+            "bytecode info observable hash: 0x{}",
+            hex::encode(observable_hash)
+        );
+        let analysis_result = factory_deps.get(&hash).unwrap_or_else(|| {
+            panic!(
+                "bytecode info hash not found in factory deps: 0x{}",
+                hex::encode(hash.as_slice())
+            )
+        });
+        assert_eq!(hash, analysis_result.bytecode_hash);
+        Self {
+            hash,
+            len,
+            observable_hash,
+            hash_with_artifacts: analysis_result.hash_with_artifacts,
+            artifacts_len: analysis_result.artifacts_len,
+        }
     }
 }

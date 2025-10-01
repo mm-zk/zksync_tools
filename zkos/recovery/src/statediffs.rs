@@ -4,7 +4,7 @@ use zk_os_basic_system::system_implementation::flat_storage_model::{
     AccountProperties, VersioningData,
 };
 
-use crate::BytecodeInfo;
+use crate::bytecodes::BytecodeInfo;
 
 #[derive(Debug)]
 pub struct StateDiff {

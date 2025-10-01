@@ -12,8 +12,9 @@ use alloy::{
 use anyhow::{Context, Result};
 
 use crate::{
-    BytecodeInfo, FixedForceDeploymentsData, GenesisUpgrade, ZKChainSpecificForceDeploymentsData,
-    deploy::analyze_bytecode, genesisUpgradeCall, upgradeCall,
+    FixedForceDeploymentsData, GenesisUpgrade, ZKChainSpecificForceDeploymentsData,
+    bytecodes::{BytecodeInfo, analyze_bytecode},
+    genesisUpgradeCall, upgradeCall,
 };
 
 #[derive(Default, Clone)]
