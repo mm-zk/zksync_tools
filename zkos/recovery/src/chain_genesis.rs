@@ -10,6 +10,7 @@ use alloy::{
     sol_types::{SolCall, SolEvent},
 };
 use anyhow::{Context, Result};
+use serde::{Deserialize, Serialize};
 
 use crate::{
     bytecodes::{BytecodeInfo, analyze_bytecode},
@@ -19,7 +20,7 @@ use crate::{
     },
 };
 
-#[derive(Default, Clone)]
+#[derive(Default, Clone, Serialize, Deserialize, Debug)]
 pub struct GenesisUpgradeLocalInfo {
     /// Bytecodes that were force-deployed as part of the genesis upgrade.
     pub force_deploy_info: HashMap<Address, BytecodeInfo>,

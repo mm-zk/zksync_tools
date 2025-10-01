@@ -51,6 +51,10 @@ struct Args {
     /// Chunk size (number of blocks per request)
     #[arg(long, default_value_t = 2_000u64)]
     chunk: u64,
+
+    /// Output file (JSON). If omitted, prints summary to stdout.
+    #[arg(long)]
+    output: Option<String>,
 }
 
 #[tokio::main]
@@ -127,6 +131,13 @@ async fn main() -> Result<()> {
         blockchain_state.current_block,
         hex::encode(blockchain_state.tree.compute_root())
     );
+
+    if let Some(output) = args.output {
+        let json = serde_json::to_string_pretty(&blockchain_state)
+            .context("serialize blockchain state to JSON")?;
+        std::fs::write(&output, json).with_context(|| format!("write to {}", output))?;
+        tracing::info!("Wrote blockchain state to {}", output);
+    }
 
     Ok(())
 }

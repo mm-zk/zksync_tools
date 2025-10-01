@@ -3,6 +3,7 @@ use std::collections::{BTreeMap, HashMap};
 
 use alloy::primitives::{Address, B256, U256, address};
 use blake2::{Blake2s256, Digest};
+use serde::{Deserialize, Serialize};
 use zk_os_basic_system::system_implementation::flat_storage_model::AccountProperties;
 
 use crate::{
@@ -12,13 +13,14 @@ use crate::{
     statediffs::{self, ValueDiff},
 };
 /// Struct describing full blockchain state.
+#[derive(Serialize, Deserialize, Debug)]
 pub struct BlockchainState {
     pub genesis_tx: GenesisUpgradeLocalInfo,
     pub tree: LocalTree,
     pub preimage_store: HashMap<B256, Vec<u8>>,
     pub current_block: u64,
     pub current_batch: u64,
-    pub last_256_block_hashes: [B256; 256],
+    pub last_256_block_hashes: Vec<B256>,
 }
 
 impl BlockchainState {
@@ -27,7 +29,7 @@ impl BlockchainState {
 
         let preimage_store = HashMap::from_iter(genesis_state.preimages.iter().cloned());
 
-        let mut last_256_block_hashes = [B256::default(); 256];
+        let mut last_256_block_hashes = vec![B256::default(); 256];
         last_256_block_hashes[255] = genesis_state.header.hash_slow();
 
         Self {
@@ -173,7 +175,7 @@ pub fn apply_block_state_diffs(
     }
 }
 
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize)]
 pub struct Leaf {
     pub key: B256,
     pub value: B256,
@@ -200,6 +202,7 @@ impl Leaf {
 
 const TREE_DEPTH: u8 = 64;
 
+#[derive(Serialize, Deserialize, Debug)]
 /// Simple in-memory implementation of a Merkle tree with linked list of leaves.
 pub struct LocalTree {
     // Key to index.

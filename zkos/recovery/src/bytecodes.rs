@@ -2,6 +2,7 @@ use std::collections::HashMap;
 
 use alloy::primitives::{B256, U256};
 use blake2::{Blake2s256, Digest};
+use serde::{Deserialize, Serialize};
 use zk_os_basic_system::system_implementation::flat_storage_model::bytecode_padding_len;
 
 pub struct BitMap {
@@ -118,7 +119,7 @@ pub fn analyze_bytecode(bytecode: &[u8]) -> BytecodeAnalysisResults {
 
 /// Bytecode information - covering both hashes, length, and artifacts.
 // This is used for deployed bytecodes only.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BytecodeInfo {
     /// Blake2s hash of bytecode.
     pub hash: B256,
