@@ -35,6 +35,12 @@ Actually running the tool:
 cargo run -- --rpc http://localhost:8545 --address 0x8FdB49aBc1E2B891D91f64B15aE6A3616c8d8d1e
 ```
 
+Checking testnet:
+
+```shell
+cargo run -- --rpc SEPOLIA_RPC --address 0x02b1ac1cf0a592aefd3c2246b2431388365db272 --from 9210280 --to 9318536
+```
+
 
 
 ## TODO
@@ -42,6 +48,6 @@ cargo run -- --rpc http://localhost:8545 --address 0x8FdB49aBc1E2B891D91f64B15aE
 
 - [DONE] state diff unpacking from L1
 - [DONE] creating state, and verifying hash
-- Need to clean up bytecode hashes / AccountProperties computation and verify. 
+- [DONE] Need to clean up bytecode hashes / AccountProperties computation and verify. 
 - applying the state to rocksDB
 - executing next batch

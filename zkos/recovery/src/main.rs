@@ -235,7 +235,14 @@ async fn main() -> Result<()> {
     let mut genesis_local_info = None;
 
     let mut full_results = HashMap::new();
+    let chunks_total = (to - from) / args.chunk + 1;
+    println!("Total chunks to scan: {}", chunks_total);
+    let mut chunks_done = 0;
     while start <= to {
+        chunks_done += 1;
+        if chunks_done % 10 == 0 {
+            eprintln!("Progress: {}/{} chunks done", chunks_done, chunks_total);
+        }
         let end = (start + args.chunk - 1).min(to);
         //scan_range(&provider, target, start, end, args.decode_commit).await?;
         let scan_results = scan_commits_via_logs(&provider, target, start, end).await?;
@@ -841,7 +848,16 @@ pub fn parse_block_da(input: &[u8]) -> Result<(usize, B256, Vec<StateDiff>, Vec<
     println!("pubdata messages len: {}", messages_len);
 
     if messages_len > 0 {
-        todo!();
+        for _ in 0..messages_len {
+            let len = u32::from_be_bytes(
+                remaining[offset..offset + 4]
+                    .try_into()
+                    .expect("slice with incorrect length"),
+            );
+            offset += 4;
+            println!("message len: {}", len);
+            offset += len as usize;
+        }
     }
 
     println!("pubdata remaining len: {}", remaining.len() - offset);
