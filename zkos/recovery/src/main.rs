@@ -258,6 +258,7 @@ async fn main() -> Result<()> {
     batch_numbers.sort_unstable();
     let mut last_256_block_hashes = [B256::default(); 256];
     last_256_block_hashes[255] = genesis.header.hash_slow();
+    let mut block_number = 0u64;
 
     for batch_number in batch_numbers {
         let info = full_results.get(&batch_number).unwrap();
@@ -284,8 +285,8 @@ async fn main() -> Result<()> {
                 last_256_block_hashes[i] = last_256_block_hashes[i + 1];
             }
 
-            // FIXME: what if we have many blocks in a batch?
             last_256_block_hashes[255] = block_info.block_hash;
+            block_number += 1;
         }
 
         let tree_root = tree.compute_root();
@@ -300,8 +301,8 @@ async fn main() -> Result<()> {
         let mut hasher = Blake2s256::new();
         hasher.update(tree_root.as_slice());
         hasher.update(leaf_count.to_be_bytes());
-        hasher.update(commit.batchNumber.to_be_bytes());
-        println!("Block number used: {}", commit.batchNumber);
+        hasher.update(block_number.to_be_bytes());
+        println!("Block number used: {}", block_number);
 
         let mut blocks_hasher = Blake2s256::new();
         for h in last_256_block_hashes.iter() {
