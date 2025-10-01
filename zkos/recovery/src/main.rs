@@ -1,8 +1,10 @@
+use core::hash;
 use std::{collections::HashMap, str::FromStr};
 
 use alloy::{
     consensus::Transaction,
     dyn_abi::SolType,
+    hex::FromHex,
     primitives::{Address, B256, U256, address},
     providers::{Provider, ProviderBuilder},
     rpc::types::Filter,
@@ -254,27 +256,72 @@ async fn main() -> Result<()> {
     // get sorted keys from full_results
     let mut batch_numbers: Vec<u64> = full_results.keys().cloned().collect();
     batch_numbers.sort_unstable();
+    let mut last_256_block_hashes = [B256::default(); 256];
+    last_256_block_hashes[255] = genesis.header.hash_slow();
+
     for batch_number in batch_numbers {
         let info = full_results.get(&batch_number).unwrap();
 
         println!("Batch {}: {:?}", batch_number, info.batch_hash);
 
+        assert_eq!(1, info.commits.len());
+        let commit = &info.commits[0];
+
         apply_batch(&mut tree, &mut preimage_store, info, &genesis_local_info);
+        let tree_root = tree.compute_root();
+        let leaf_count: u64 = tree.leaves.len() as u64;
+
+        println!("Tree root: 0x{}", hex::encode(tree_root));
 
         println!(
-            "Tree root: 0x{}",
-            hex::encode(tree.compute_root().as_slice())
+            "Expected state commitment: 0x{}",
+            hex::encode(commit.newStateCommitment.as_slice())
         );
-        println!("Leaves: {}", tree.leaves.len());
+        let mut hasher = Blake2s256::new();
+        hasher.update(tree_root.as_slice());
+        hasher.update(leaf_count.to_be_bytes());
+        hasher.update(commit.batchNumber.to_be_bytes());
+        println!("Block number used: {}", commit.batchNumber);
+
+        for i in 0..255 {
+            last_256_block_hashes[i] = last_256_block_hashes[i + 1];
+        }
+
+        // FIXME: what if we have many blocks in a batch?
+        last_256_block_hashes[255] = info.block_hash;
+
+        let mut blocks_hasher = Blake2s256::new();
+        for h in last_256_block_hashes.iter() {
+            blocks_hasher.update(h.as_slice());
+        }
+        let last_256_block_hashes_blake = blocks_hasher.finalize();
+        hasher.update(last_256_block_hashes_blake);
+        // TODO: shoudl this be first or last?
+        hasher.update(commit.lastBlockTimestamp.to_be_bytes());
+        println!("Block timestamp used: {}", commit.lastBlockTimestamp);
+        let state_commitment = B256::from_slice(&hasher.finalize());
+        println!(
+            "Computed state commitment: 0x{}",
+            hex::encode(state_commitment)
+        );
+
+        assert_eq!(
+            commit.newStateCommitment, state_commitment,
+            "State commitment mismatch"
+        );
+
+        // let's try to compute commitment on our own.
+
+        //println!("Leaves: {}", tree.leaves.len());
         //println!("0th commit info: {:?}", info.commits[0]);
 
-        for leaf in tree.leaves.iter() {
+        /*for leaf in tree.leaves.iter() {
             println!(
                 "  0x{} => 0x{}",
                 hex::encode(leaf.key.as_slice()),
                 hex::encode(leaf.value.as_slice())
             );
-        }
+        }*/
     }
 
     Ok(())
@@ -289,6 +336,8 @@ pub struct BatchInfo {
     pub commits: Vec<CommitBatchInfoZKsyncOS>,
     pub state_diffs: Vec<StateDiff>,
     pub logs: Vec<statediffs::Log>,
+    // TODO: this should probably be a vector.
+    pub block_hash: B256,
 }
 
 async fn scan_commits_via_logs<P: Provider + Clone>(
@@ -360,7 +409,7 @@ async fn scan_commits_via_logs<P: Provider + Clone>(
             let tmp = &commits[0];
             assert_eq!(1, commits.len());
 
-            let (state_diffs, logs) = parse_da_input(&tmp.operatorDAInput).unwrap();
+            let (block_hash, state_diffs, logs) = parse_da_input(&tmp.operatorDAInput).unwrap();
 
             let batch_number: u64 = batch.try_into().unwrap();
             results.insert(
@@ -374,6 +423,7 @@ async fn scan_commits_via_logs<P: Provider + Clone>(
                     commits,
                     state_diffs,
                     logs,
+                    block_hash,
                 },
             );
         }
@@ -647,7 +697,7 @@ impl BytecodeInfo {
     }
 }
 
-pub fn parse_da_input(input: &[u8]) -> Result<(Vec<StateDiff>, Vec<statediffs::Log>)> {
+pub fn parse_da_input(input: &[u8]) -> Result<(B256, Vec<StateDiff>, Vec<statediffs::Log>)> {
     // first 32 bytes should be 0, the next 32 is some keccak.
     if input.len() < 64 {
         eprintln!("DA input too short: {}", input.len());
@@ -696,8 +746,8 @@ pub fn parse_da_input(input: &[u8]) -> Result<(Vec<StateDiff>, Vec<statediffs::L
         return Err(anyhow::anyhow!("pubdata too short for hash"));
     }
     // This is the 'current_block_hash' from io_subsystem.rs 'finish'
-    let pubdata_hash2 = &pubdata[0..32];
-    eprintln!("pubdata?? hash: 0x{}", hex::encode(pubdata_hash2));
+    let block_header_hash = B256::from_slice(&pubdata[0..32]);
+    eprintln!("block header hash: 0x{}", hex::encode(block_header_hash));
 
     let (state_diff_offset, state_diff) = StateDiff::new_from_stream(&pubdata[32..]);
     //eprintln!("pubdata parsed len: {}", state_diff_offset);
@@ -754,7 +804,7 @@ pub fn parse_da_input(input: &[u8]) -> Result<(Vec<StateDiff>, Vec<statediffs::L
     println!("last slot: {:?}", last_slot);
     assert_eq!(last_slot, B256::ZERO);
 
-    Ok((state_diff, logs))
+    Ok((block_header_hash, state_diff, logs))
 }
 
 /*
@@ -865,24 +915,24 @@ pub fn apply_batch(
     for (addr, bytecode_info) in &genesis_info.force_deploy_info {
         let derived_key = derive_properties_storage_address(addr);
 
-        println!(
+        /*println!(
             "Applying force-deploy for addr 0x{} at key 0x{:x}",
             hex::encode(addr.as_slice()),
             derived_key
-        );
+        );*/
         force_deploy_map.insert(derived_key, bytecode_info.clone());
     }
 
     for diff in &info.state_diffs {
         match diff.value {
             statediffs::StateDiffValue::AccountProperties(ref ap) => {
-                println!(
+                /*println!(
                     "XXXX  Applying AccountProperties diff for key 0x{:x}",
                     diff.derived_key
-                );
-                println!("**AccountProperties diff: {:#?}", ap);
+                );*/
+                //println!("**AccountProperties diff: {:#?}", ap);
                 let account_hash = tree.get_value(diff.derived_key);
-                println!("**account hash: {:#x}", account_hash);
+                //println!("**account hash: {:#x}", account_hash);
 
                 let properties = if account_hash.is_zero() {
                     AccountProperties::default()
@@ -899,7 +949,7 @@ pub fn apply_batch(
                 let properties =
                     ap.update_itself(properties, force_deploy_map.get(&diff.derived_key));
 
-                println!("**new account properties: {:#?}", properties);
+                //println!("**new account properties: {:#?}", properties);
                 let properties_hash = properties.compute_hash();
                 preimage_store.insert(
                     properties_hash.as_u8_array().into(),
