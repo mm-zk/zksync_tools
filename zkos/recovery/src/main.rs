@@ -1,10 +1,8 @@
-use core::hash;
 use std::{collections::HashMap, str::FromStr};
 
 use alloy::{
     consensus::Transaction,
     dyn_abi::SolType,
-    hex::FromHex,
     primitives::{Address, B256, U256, address},
     providers::{Provider, ProviderBuilder},
     rpc::types::Filter,
@@ -14,6 +12,8 @@ use alloy::{
 use anyhow::{Context, Result, bail};
 use blake2::{Blake2s256, Digest};
 use clap::Parser;
+use tracing::level_filters::LevelFilter;
+use tracing_subscriber::EnvFilter;
 use zk_os_basic_system::system_implementation::flat_storage_model::AccountProperties;
 
 use crate::{
@@ -198,6 +198,13 @@ struct Args {
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    tracing_subscriber::fmt()
+        .with_env_filter(
+            EnvFilter::builder()
+                .with_default_directive(LevelFilter::INFO.into())
+                .from_env_lossy(),
+        )
+        .init();
     let args = Args::parse();
 
     let genesis = init_genesis();
@@ -222,7 +229,7 @@ async fn main() -> Result<()> {
         bail!("from block must be <= to block");
     }
 
-    eprintln!(
+    tracing::info!(
         "Scanning {} -> {} ({} blocks) on {}",
         from,
         to,
@@ -236,18 +243,18 @@ async fn main() -> Result<()> {
 
     let mut full_results = HashMap::new();
     let chunks_total = (to - from) / args.chunk + 1;
-    println!("Total chunks to scan: {}", chunks_total);
+    tracing::debug!("Total chunks to scan: {}", chunks_total);
     let mut chunks_done = 0;
     while start <= to {
         chunks_done += 1;
         if chunks_done % 10 == 0 {
-            eprintln!("Progress: {}/{} chunks done", chunks_done, chunks_total);
+            tracing::debug!("Progress: {}/{} chunks done", chunks_done, chunks_total);
         }
         let end = (start + args.chunk - 1).min(to);
         //scan_range(&provider, target, start, end, args.decode_commit).await?;
         let scan_results = scan_commits_via_logs(&provider, target, start, end).await?;
 
-        scan_priority_requests(&provider, target, start, end).await?;
+        //scan_priority_requests(&provider, target, start, end).await?;
         let is_genesis = scan_genesis_upgrade(&provider, target, start, end).await?;
         if let Some(genesis) = is_genesis {
             genesis_local_info = Some(genesis);
@@ -256,7 +263,7 @@ async fn main() -> Result<()> {
         full_results.extend(scan_results);
         start = end.saturating_add(1);
     }
-    eprintln!("Scanned {} batches", full_results.len());
+    tracing::debug!("Scanned {} batches", full_results.len());
 
     let genesis_local_info = genesis_local_info.unwrap();
 
@@ -267,16 +274,16 @@ async fn main() -> Result<()> {
     last_256_block_hashes[255] = genesis.header.hash_slow();
     let mut block_number = 0u64;
 
-    for batch_number in batch_numbers {
+    for batch_number in &batch_numbers {
         let info = full_results.get(&batch_number).unwrap();
 
-        println!("Batch {}: {:?}", batch_number, info.batch_hash);
+        tracing::debug!("Batch {}: {:?}", batch_number, info.batch_hash);
 
         assert_eq!(1, info.commits.len());
         let commit = &info.commits[0];
 
         for block_info in &info.blocks_data {
-            println!(
+            tracing::debug!(
                 "  Block: 0x{} with {} state diffs and {} logs",
                 hex::encode(block_info.block_hash.as_slice()),
                 block_info.state_diffs.len(),
@@ -299,9 +306,9 @@ async fn main() -> Result<()> {
         let tree_root = tree.compute_root();
         let leaf_count: u64 = tree.leaves.len() as u64;
 
-        println!("Tree root: 0x{}", hex::encode(tree_root));
+        tracing::debug!("Tree root: 0x{}", hex::encode(tree_root));
 
-        println!(
+        tracing::debug!(
             "Expected state commitment: 0x{}",
             hex::encode(commit.newStateCommitment.as_slice())
         );
@@ -309,7 +316,7 @@ async fn main() -> Result<()> {
         hasher.update(tree_root.as_slice());
         hasher.update(leaf_count.to_be_bytes());
         hasher.update(block_number.to_be_bytes());
-        println!("Block number used: {}", block_number);
+        tracing::debug!("Block number used: {}", block_number);
 
         let mut blocks_hasher = Blake2s256::new();
         for h in last_256_block_hashes.iter() {
@@ -319,9 +326,9 @@ async fn main() -> Result<()> {
         hasher.update(last_256_block_hashes_blake);
         // TODO: shoudl this be first or last?
         hasher.update(commit.lastBlockTimestamp.to_be_bytes());
-        println!("Block timestamp used: {}", commit.lastBlockTimestamp);
+        tracing::debug!("Block timestamp used: {}", commit.lastBlockTimestamp);
         let state_commitment = B256::from_slice(&hasher.finalize());
-        println!(
+        tracing::debug!(
             "Computed state commitment: 0x{}",
             hex::encode(state_commitment)
         );
@@ -330,20 +337,14 @@ async fn main() -> Result<()> {
             commit.newStateCommitment, state_commitment,
             "State commitment mismatch"
         );
-
-        // let's try to compute commitment on our own.
-
-        //println!("Leaves: {}", tree.leaves.len());
-        //println!("0th commit info: {:?}", info.commits[0]);
-
-        /*for leaf in tree.leaves.iter() {
-            println!(
-                "  0x{} => 0x{}",
-                hex::encode(leaf.key.as_slice()),
-                hex::encode(leaf.value.as_slice())
-            );
-        }*/
     }
+
+    tracing::info!(
+        "All {} batches and {} blocks applied successfully, final tree root: 0x{}",
+        batch_numbers.len(),
+        block_number,
+        hex::encode(tree.compute_root())
+    );
 
     Ok(())
 }
@@ -400,10 +401,7 @@ async fn scan_commits_via_logs<P: Provider + Clone>(
         // Convert the RPC log into the primitives Log expected by the SolEvent decoder.
         let prim_log = alloy::primitives::Log {
             address: lg.address(),
-            data: lg.data().clone(), /*data: alloy::primitives::LogData:::new_unchecked(
-                                         lg.topics().clone().into(),
-                                         lg.data().clone(),
-                                     ),*/
+            data: lg.data().clone(),
         };
         if let Ok(ev) = BlockCommit::decode_log(&prim_log) {
             let batch = ev.batchNumber;
@@ -412,7 +410,7 @@ async fn scan_commits_via_logs<P: Provider + Clone>(
 
             let calldata = tx.input().clone();
 
-            println!(
+            tracing::debug!(
                 "{{\"block\":{},\"tx\":\"0x{}\",\"batchNumber\":{},\"batchHash\":\"0x{}\",\"commitment\":\"0x{}\"}}",
                 lg.block_number.unwrap_or_default(),
                 hex::encode(tx_hash.as_slice()),
@@ -448,68 +446,6 @@ async fn scan_commits_via_logs<P: Provider + Clone>(
                     commits,
                     blocks_data,
                 },
-            );
-        }
-    }
-
-    Ok(results)
-}
-
-async fn scan_priority_requests<P: Provider + Clone>(
-    provider: &P,
-    address: Address,
-    from: u64,
-    to: u64,
-) -> Result<HashMap<u64, BatchInfo>> {
-    // Build a filter: address + topic0 = event signature. Indexed params (batchNumber, batchHash, commitment)
-    // can also be filtered later via `topic1/2/3` if needed.
-    let filter = Filter::new()
-        .address(address)
-        .event_signature(NewPriorityRequest::SIGNATURE_HASH)
-        .from_block(from)
-        .to_block(to);
-
-    // Fetch all matching logs.
-    let logs = provider
-        .get_logs(&filter)
-        .await
-        .context("get_logs(NewPriorityRequest)")?;
-
-    let mut results = HashMap::new();
-
-    for lg in logs {
-        // Each log belongs to a tx; pull its calldata using the tx hash.
-        let tx_hash: B256 = lg.transaction_hash.context("log missing tx hash")?;
-        let tx = provider
-            .get_transaction_by_hash(tx_hash)
-            .await
-            .with_context(|| format!("get_tx {}", tx_hash))?;
-        let Some(tx) = tx else { continue };
-
-        // Decode the event (topics+data) using the generated type.
-        // Convert the RPC log into the primitives Log expected by the SolEvent decoder.
-        let prim_log = alloy::primitives::Log {
-            address: lg.address(),
-            data: lg.data().clone(), /*data: alloy::primitives::LogData:::new_unchecked(
-                                         lg.topics().clone().into(),
-                                         lg.data().clone(),
-                                     ),*/
-        };
-        if let Ok(ev) = NewPriorityRequest::decode_log(&prim_log) {
-            println!(
-                "NewPriorityRequest: txType={} txId={} txHash=0x{} expiration={} from=0x{} to=0x{} nonce={} value={} data_len={} factoryDeps={} data={} internal_deps={}",
-                ev.transaction.txType,
-                ev.txId,
-                hex::encode(ev.txHash.as_slice()),
-                ev.expirationTimestamp,
-                hex::encode(ev.transaction.from.to_be_bytes_vec()),
-                hex::encode(ev.transaction.to.to_be_bytes_vec()),
-                ev.transaction.nonce,
-                ev.transaction.value,
-                ev.transaction.data.len(),
-                ev.factoryDeps.len(),
-                hex::encode(ev.transaction.data.clone()),
-                ev.transaction.factoryDeps.len(),
             );
         }
     }
@@ -553,7 +489,7 @@ async fn scan_genesis_upgrade<P: Provider + Clone>(
                                      ),*/
         };
         if let Ok(ev) = GenesisUpgrade::decode_log(&prim_log) {
-            println!(
+            tracing::debug!(
                 "GenesisUpgrade: zkChain=0x{} protocolVersion={} txType={} from=0x{} to=0x{} nonce={} value={} data_len={} factoryDeps={} internal_deps={}",
                 hex::encode(ev._zkChain.as_slice()),
                 ev._protocolVersion,
@@ -576,7 +512,7 @@ async fn scan_genesis_upgrade<P: Provider + Clone>(
 
             // Now a bunch of hacks, to decode the actual L2 tx and preimages.
             let upgrade = upgradeCall::abi_decode(&ev._l2Transaction.data).unwrap();
-            println!(
+            tracing::debug!(
                 "updated calldata len: {} full: {}",
                 upgrade._calldata.len(),
                 hex::encode(&upgrade._calldata)
@@ -584,7 +520,7 @@ async fn scan_genesis_upgrade<P: Provider + Clone>(
 
             let genesis_upgrade = genesisUpgradeCall::abi_decode(&upgrade._calldata).unwrap();
 
-            println!(
+            tracing::debug!(
                 "genesisUpgrade: isZKsyncOS={} chainId={} ctmDeployer=0x{} fixedForceDeploymentsData_len={} additionalForceDeploymentsData_len={}",
                 genesis_upgrade._isZKsyncOS,
                 genesis_upgrade._chainId,
@@ -597,14 +533,14 @@ async fn scan_genesis_upgrade<P: Provider + Clone>(
                 FixedForceDeploymentsData::abi_decode(&genesis_upgrade._fixedForceDeploymentsData)
                     .unwrap();
 
-            println!("Fixed deployment full info {:#?}", fixed_deployment_data);
+            tracing::debug!("Fixed deployment full info {:#?}", fixed_deployment_data);
 
             let zkchain_deployment_data = ZKChainSpecificForceDeploymentsData::abi_decode(
                 &genesis_upgrade._additionalForceDeploymentsData,
             )
             .unwrap();
 
-            println!(
+            tracing::debug!(
                 "ZKChain-specific deployment full info {:#?}",
                 zkchain_deployment_data
             );
@@ -697,9 +633,9 @@ impl BytecodeInfo {
         let hash = B256::try_from(&bytecode_info[0..32]).unwrap();
         let len = U256::from_be_slice(&bytecode_info[32..64]);
         let observable_hash = B256::try_from(&bytecode_info[64..96]).unwrap();
-        eprintln!("bytecode info hash: 0x{}", hex::encode(hash));
-        eprintln!("bytecode info len: {}", len);
-        eprintln!(
+        tracing::debug!("bytecode info hash: 0x{}", hex::encode(hash));
+        tracing::debug!("bytecode info len: {}", len);
+        tracing::debug!(
             "bytecode info observable hash: 0x{}",
             hex::encode(observable_hash)
         );
@@ -723,36 +659,36 @@ impl BytecodeInfo {
 pub fn parse_da_input(input: &[u8]) -> Result<Vec<BlockInfo>> {
     // first 32 bytes should be 0, the next 32 is some keccak.
     if input.len() < 64 {
-        eprintln!("DA input too short: {}", input.len());
+        tracing::error!("DA input too short: {}", input.len());
         return Err(anyhow::anyhow!("DA input too short"));
     }
     // not sure what this prefix is..
     let prefix = &input[0..32];
     let pubdata_hash = &input[32..64];
     if prefix.iter().any(|&b| b != 0) {
-        eprintln!("DA input prefix not zero: {:x?}", prefix);
+        tracing::error!("DA input prefix not zero: {:x?}", prefix);
         return Err(anyhow::anyhow!("DA input prefix not zero"));
     }
-    eprintln!("pubdata input hash: 0x{}", hex::encode(pubdata_hash));
+    tracing::debug!("pubdata input hash: 0x{}", hex::encode(pubdata_hash));
     let blob_count = &input[64];
     // for calldata, blobcount should be 1.
 
-    eprintln!("blob count: {}", blob_count);
+    tracing::debug!("blob count: {}", blob_count);
     let mut offset = 65;
     // another 32 bytes that should be 0.
     if input.len() < offset + 32 {
-        eprintln!("DA input too short for second zero: {}", input.len());
+        tracing::error!("DA input too short for second zero: {}", input.len());
         return Err(anyhow::anyhow!("DA input too short for second zero"));
     }
     let mid = &input[offset..offset + 32];
     if mid.iter().any(|&b| b != 0) {
-        eprintln!("DA input mid not zero: {:x?}", mid);
+        tracing::error!("DA input mid not zero: {:x?}", mid);
         return Err(anyhow::anyhow!("DA input mid not zero"));
     }
     offset += 32;
 
     let calldata_type = &input[offset];
-    eprintln!("calldata type: {}", calldata_type);
+    tracing::debug!("calldata type: {}", calldata_type);
     assert_eq!(&0, calldata_type); // we only handle calldata type 0
 
     offset += 1;
@@ -761,9 +697,9 @@ pub fn parse_da_input(input: &[u8]) -> Result<Vec<BlockInfo>> {
 
     let mut results = vec![];
     loop {
-        println!("parsing block {}", results.len());
+        tracing::debug!("parsing block {}", results.len());
         let (consumed, block_header_hash, state_diff, logs) = parse_block_da(&input[offset..])?;
-        println!(
+        tracing::debug!(
             "offset: {} consumed: {} input len: {}",
             offset,
             consumed,
@@ -780,38 +716,35 @@ pub fn parse_da_input(input: &[u8]) -> Result<Vec<BlockInfo>> {
             break;
         }
     }
-    let last_slot = B256::from_slice(&input[offset..offset + 32]);
-    println!("last slot: {:?}", last_slot);
-    // TODO: what is in the last slot?
-    assert_eq!(last_slot, B256::ZERO);
+    let blob_commitment = B256::from_slice(&input[offset..offset + 32]);
+    tracing::debug!("blob commitment: {:?}", blob_commitment);
+    assert_eq!(blob_commitment, B256::ZERO);
 
     Ok(results)
 }
 
 pub fn parse_block_da(input: &[u8]) -> Result<(usize, B256, Vec<StateDiff>, Vec<statediffs::Log>)> {
     let pubdata = input;
-    eprintln!("pubdata len: {}", pubdata.len());
+    tracing::debug!("pubdata len: {}", pubdata.len());
 
     // now for pubdata itself.
 
     // First 32 should be some hash.
     if pubdata.len() < 32 {
-        eprintln!("pubdata too short for hash: {}", pubdata.len());
+        tracing::error!("pubdata too short for hash: {}", pubdata.len());
         return Err(anyhow::anyhow!("pubdata too short for hash"));
     }
     // This is the 'current_block_hash' from io_subsystem.rs 'finish'
     let block_header_hash = B256::from_slice(&pubdata[0..32]);
-    eprintln!("block header hash: 0x{}", hex::encode(block_header_hash));
+    tracing::debug!("block header hash: 0x{}", hex::encode(block_header_hash));
 
     let (state_diff_offset, state_diff) = StateDiff::new_from_stream(&pubdata[32..]);
-    //eprintln!("pubdata parsed len: {}", state_diff_offset);
-    //eprintln!("pubdata state diff: {:#?}", state_diff);
 
     let remaining = &pubdata[32 + state_diff_offset as usize..];
 
     // u32 for logs length
     if remaining.len() < 4 {
-        eprintln!("pubdata too short for logs len: {}", remaining.len());
+        tracing::error!("pubdata too short for logs len: {}", remaining.len());
         return Err(anyhow::anyhow!("pubdata too short for logs len"));
     }
     let logs_len = u32::from_be_bytes(
@@ -819,7 +752,7 @@ pub fn parse_block_da(input: &[u8]) -> Result<(usize, B256, Vec<StateDiff>, Vec<
             .try_into()
             .expect("slice with incorrect length"),
     );
-    eprintln!("pubdata logs len: {}", logs_len);
+    tracing::debug!("pubdata logs len: {}", logs_len);
 
     let mut offset = 4;
 
@@ -827,14 +760,13 @@ pub fn parse_block_da(input: &[u8]) -> Result<(usize, B256, Vec<StateDiff>, Vec<
 
     for _ in 0..logs_len {
         let (consumed, log) = statediffs::Log::new_from_stream(&remaining[offset..]);
-        //println!("log: {:#?}", log);
 
         logs.push(log);
         offset += consumed as usize;
     }
 
     let messages_len: u32 = if remaining.len() < offset + 4 {
-        eprintln!("pubdata too short for messages len: {}", remaining.len());
+        tracing::error!("pubdata too short for messages len: {}", remaining.len());
         return Err(anyhow::anyhow!("pubdata too short for messages len"));
     } else {
         u32::from_be_bytes(
@@ -845,7 +777,7 @@ pub fn parse_block_da(input: &[u8]) -> Result<(usize, B256, Vec<StateDiff>, Vec<
     };
     offset += 4;
 
-    println!("pubdata messages len: {}", messages_len);
+    tracing::debug!("pubdata messages len: {}", messages_len);
 
     if messages_len > 0 {
         for _ in 0..messages_len {
@@ -855,19 +787,12 @@ pub fn parse_block_da(input: &[u8]) -> Result<(usize, B256, Vec<StateDiff>, Vec<
                     .expect("slice with incorrect length"),
             );
             offset += 4;
-            println!("message len: {}", len);
+            tracing::trace!("message len: {}", len);
             offset += len as usize;
         }
     }
 
-    println!("pubdata remaining len: {}", remaining.len() - offset);
-    //assert_eq!(remaining.len() - offset, 32);
-
-    //let last_slot = B256::from_slice(&remaining[offset..offset + 32]);
-    //println!("last slot: {:?}", last_slot);
-    // TODO: what is in the last slot?
-    //assert_eq!(last_slot, B256::ZERO);
-    //offset += 32;
+    tracing::debug!("pubdata remaining len: {}", remaining.len() - offset);
 
     Ok((
         offset + 32 + state_diff_offset as usize,
@@ -876,86 +801,6 @@ pub fn parse_block_da(input: &[u8]) -> Result<(usize, B256, Vec<StateDiff>, Vec<
         logs,
     ))
 }
-
-/*
-
-// some 'zero' ?
-0000000000000000000000000000000000000000000000000000000000000000
-// keccak of pubdata
-6eb0d00bd36db7ddad60a3cd5b94a289466d825c2038ff8393f451d634c9bd63
-01 // 1 ??
-// another 0 ?
-0000000000000000000000000000000000000000000000000000000000000000
-// calldata
-00
-// pubdata - concat from many blocks (but we have only 1)
-//  -- maybe some hash?
-b76ffe1f37a1892d5fbf5284c611035bf1616584838ce7772481030027cd950d
-
-
-00000002003ac1e7247f50b6ea3ed2d1c63ce2511668e0d06882fa7a44bbcb0fb31c2e2e1c09010a6431f21254a08b1b0060d9dc74ad5f1ff038e24a6ebc26260a4a03a8d036011b591409640000000000000000
-
-
-// some finishing 0s.
-0000000000000000000000000000000000000000000000000000000000000000
-
-
-on 'finish' we push current block hash.
-
-*/
-
-/* decoding experiment
-
-
-00 -- ?
-000002003ac1e7247f50b6ea3ed2d1c63ce2511668e0d06882fa7a44bbcb0fb3
-
-1c
-2e2e1c09010a6431f21254a08b1b0060d9dc74ad5f1ff038e24a6ebc26260a4a03a8d036011b591409640000000000000000
-
-// experiment 2:
-( I've transferred 100 (0x64) wei, so it has to be somewhere.)
-
-
-// Start with fiat_storage_model
-// first u32 -- is number of diffs.
-
-
-00000002 -- ok, 2 diffs.
-
-// Then for each key - it will be eitehr a storage slot or entry in account properties.
-// But first 32 will always be the address.
-
-003ac1e7247f50b6ea3ed2d1c63ce2511668e0d06882fa7a44bbcb0fb31c2e2e
-
-1c -- 28 -- this means it is a 'small' diff, where both nonce and balance hash changed.
-// now comes the 'nonce compression'
-
-09 -- (this is 'add' - lenght == 1, )
-
-01 --nonce increased by 1
-
-
-0a -- this is a 'sub' with length = 1
-
-64 -- and we subtracted 100 (0x64) from balance.
-
-// now comes second diff key
-31f21254a08b1b0060d9dc74ad5f1ff038e24a6ebc26260a4a03a8d036011b59
-
-
-14 -- so minimal plus only balance changed
-
-09 -- so this is 'add'
-
-64 -- 0x64 - 100 - added.
-
-
-
-00000000 -- these could be u32 for logs
-00000000 -- and this is for messages.
-
-*/
 
 pub fn address_to_b256(address: &Address) -> B256 {
     let mut extended_address = [0u8; 32];
@@ -985,24 +830,24 @@ pub fn apply_batch(
     for (addr, bytecode_info) in &genesis_info.force_deploy_info {
         let derived_key = derive_properties_storage_address(addr);
 
-        /*println!(
+        tracing::trace!(
             "Applying force-deploy for addr 0x{} at key 0x{:x}",
             hex::encode(addr.as_slice()),
             derived_key
-        );*/
+        );
         force_deploy_map.insert(derived_key, bytecode_info);
     }
 
     for diff in &info.state_diffs {
         match diff.value {
             statediffs::StateDiffValue::AccountProperties(ref ap) => {
-                /*println!(
-                    "XXXX  Applying AccountProperties diff for key 0x{:x}",
+                tracing::debug!(
+                    "Applying AccountProperties diff for key 0x{:x}",
                     diff.derived_key
-                );*/
-                //println!("**AccountProperties diff: {:#?}", ap);
+                );
+                tracing::trace!("**AccountProperties diff: {:#?}", ap);
                 let account_hash = tree.get_value(diff.derived_key);
-                //println!("**account hash: {:#x}", account_hash);
+                tracing::debug!("**account hash: {:#x}", account_hash);
 
                 let properties = if account_hash.is_zero() {
                     AccountProperties::default()
@@ -1019,7 +864,7 @@ pub fn apply_batch(
                 let properties =
                     ap.update_itself(properties, force_deploy_map.get(&diff.derived_key));
 
-                //println!("**new account properties: {:#?}", properties);
+                tracing::trace!("**new account properties: {:#?}", properties);
                 let properties_hash = properties.compute_hash();
                 preimage_store.insert(
                     properties_hash.as_u8_array().into(),

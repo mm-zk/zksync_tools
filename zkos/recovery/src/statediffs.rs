@@ -1,7 +1,4 @@
-use alloy::{
-    consensus::Account,
-    primitives::{Address, B160, B256, Keccak256, U256},
-};
+use alloy::primitives::{Address, B256, Keccak256, U256};
 use blake2::{Blake2s256, Digest};
 use zk_os_basic_system::system_implementation::flat_storage_model::{
     AccountProperties, VersioningData,
@@ -60,7 +57,7 @@ impl StateDiff {
         // First u32 is the number of diffs.
         let mut cursor = 0;
         let num_diffs = u32::from_be_bytes(stream[cursor..cursor + 4].try_into().unwrap()) as u64;
-        println!("Num diffs {:?}", num_diffs);
+        tracing::debug!("Num diffs {:?}", num_diffs);
         cursor += 4;
         let mut diffs = Vec::with_capacity(num_diffs as usize);
         for _ in 0..num_diffs {
@@ -325,7 +322,7 @@ mod tests {
         let input = hex!(
             "00000002003ac1e7247f50b6ea3ed2d1c63ce2511668e0d06882fa7a44bbcb0fb31c2e2e1c09010a6431f21254a08b1b0060d9dc74ad5f1ff038e24a6ebc26260a4a03a8d036011b591409640000000000000000"
         );
-        let (consumed, diffs) = StateDiff::new_from_stream(&input);
+        let (_, diffs) = StateDiff::new_from_stream(&input);
         assert_eq!(diffs.len(), 2);
     }
 }

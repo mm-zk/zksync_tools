@@ -1,5 +1,5 @@
 use alloy::primitives::B256;
-use blake2::{Blake2s256, Digest, digest::typenum::Bit};
+use blake2::{Blake2s256, Digest};
 use zk_os_basic_system::system_implementation::flat_storage_model::bytecode_padding_len;
 
 pub struct BitMap {
@@ -69,10 +69,10 @@ pub struct BytecodeAnalysisResults {
 }
 
 pub fn analyze_bytecode(bytecode: &[u8]) -> BytecodeAnalysisResults {
-    println!("Bytecode analysis:");
+    tracing::debug!("Bytecode analysis:");
     let bytecode_hash = B256::from_slice(&Blake2s256::digest(&bytecode));
 
-    println!(
+    tracing::debug!(
         "original bytecoded hash: 0x{})",
         hex::encode(bytecode_hash.as_slice())
     );
@@ -90,12 +90,12 @@ pub fn analyze_bytecode(bytecode: &[u8]) -> BytecodeAnalysisResults {
     let mut hasher = Blake2s256::new();
     hasher.update(bytecode_padded_with_artifacts.as_slice());
     let hash_with_artifacts = B256::from_slice(&hasher.finalize());
-    println!(
+    tracing::debug!(
         "padded bytecode hash: 0x{})",
         hex::encode(hash_with_artifacts.as_slice())
     );
 
-    println!(" artifacts length: {}", artifacts.len());
+    tracing::debug!("artifacts length: {}", artifacts.len());
 
     BytecodeAnalysisResults {
         bytecode_hash,
