@@ -1,5 +1,5 @@
 // Things related with state (tree etc).
-use std::collections::{BTreeMap, HashMap};
+use std::collections::BTreeMap;
 
 use alloy::primitives::{Address, B256, U256, address};
 use blake2::{Blake2s256, Digest};
@@ -16,8 +16,9 @@ use crate::{
 #[derive(Serialize, Deserialize, Debug)]
 pub struct BlockchainState {
     pub genesis_tx: GenesisUpgradeLocalInfo,
+    pub genesis_state: GenesisState,
     pub tree: LocalTree,
-    pub preimage_store: HashMap<B256, Vec<u8>>,
+    pub preimage_store: BTreeMap<B256, Vec<u8>>,
     pub current_block: u64,
     pub current_batch: u64,
     pub last_256_block_hashes: Vec<B256>,
@@ -27,13 +28,14 @@ impl BlockchainState {
     pub fn new(genesis_state: GenesisState, genesis_tx: GenesisUpgradeLocalInfo) -> Self {
         let tree = init_tree_genesis(&genesis_state);
 
-        let preimage_store = HashMap::from_iter(genesis_state.preimages.iter().cloned());
+        let preimage_store = BTreeMap::from_iter(genesis_state.preimages.iter().cloned());
 
         let mut last_256_block_hashes = vec![B256::default(); 256];
         last_256_block_hashes[255] = genesis_state.header.hash_slow();
 
         Self {
             genesis_tx,
+            genesis_state,
             tree,
             preimage_store,
             current_batch: 0,
@@ -88,7 +90,8 @@ impl BlockchainState {
         // Safety check that commitment matches.
         assert_eq!(
             commit.newStateCommitment, state_commitment,
-            "State commitment mismatch"
+            "State commitment mismatch on batch {}",
+            batch_number
         );
     }
 
@@ -117,11 +120,11 @@ impl BlockchainState {
 
 pub fn apply_block_state_diffs(
     tree: &mut LocalTree,
-    preimage_store: &mut HashMap<B256, Vec<u8>>,
+    preimage_store: &mut BTreeMap<B256, Vec<u8>>,
     info: &BlockInfo,
     genesis_info: &GenesisUpgradeLocalInfo, // In future, this should also cover upgraded and l1 tx.
 ) {
-    let mut force_deploy_map = HashMap::new();
+    let mut force_deploy_map = BTreeMap::new();
     // Change force deploy info into derived key.
     for (addr, bytecode_info) in &genesis_info.force_deploy_info {
         let derived_key = derive_properties_storage_address(addr);
@@ -325,7 +328,7 @@ pub fn compute_genesis_commitment(genesis: &GenesisState) -> B256 {
 
 // Blake2Hasher.
 
-fn hash_leaf(leaf: &Leaf) -> B256 {
+pub fn hash_leaf(leaf: &Leaf) -> B256 {
     let mut hashed_bytes = [0; 2 * 32 + 8];
     hashed_bytes[..32].copy_from_slice(leaf.key.as_slice());
     hashed_bytes[32..64].copy_from_slice(leaf.value.as_slice());
@@ -339,7 +342,7 @@ fn hash_bytes(value: &[u8]) -> B256 {
     B256::from(<[u8; 32]>::from(hasher.finalize()))
 }
 
-fn compress(lhs: &B256, rhs: &B256) -> B256 {
+pub fn compress(lhs: &B256, rhs: &B256) -> B256 {
     let mut hasher = Blake2s256::new();
     hasher.update(lhs);
     hasher.update(rhs);

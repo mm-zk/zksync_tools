@@ -1,6 +1,6 @@
 // Things related to genesis state and upgrade.
 
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 
 use alloy::{
     dyn_abi::SolType,
@@ -23,7 +23,7 @@ use crate::{
 #[derive(Default, Clone, Serialize, Deserialize, Debug)]
 pub struct GenesisUpgradeLocalInfo {
     /// Bytecodes that were force-deployed as part of the genesis upgrade.
-    pub force_deploy_info: HashMap<Address, BytecodeInfo>,
+    pub force_deploy_info: BTreeMap<Address, BytecodeInfo>,
 }
 
 /// Scan over blocs from 'from' to 'to' (inclusive) looking for GenesisUpgrade event.
@@ -103,7 +103,7 @@ async fn scan_genesis_upgrade<P: Provider + Clone>(
                 ev._factoryDeps.len(),
             );
 
-            let mut factory_deps_analyzed = HashMap::new();
+            let mut factory_deps_analyzed = BTreeMap::new();
 
             for dep in ev._factoryDeps.iter() {
                 let analysis_result = analyze_bytecode(&dep);

@@ -22,10 +22,10 @@ use crate::{
 pub mod bytecodes;
 pub mod chain_genesis;
 pub mod contracts;
+pub mod sequencer_db;
 pub mod state;
 pub mod state_genesis;
 pub mod statediffs;
-
 #[derive(Debug, Parser)]
 #[command(
     name = "l1-recovery",
@@ -41,10 +41,21 @@ struct Cli {
 pub enum Command {
     /// Recover state from L1, check correctness and optionally write to json file.
     Recover(RecoverArgs),
+    WriteToDB(WriteToDBArgs),
 }
 
 #[derive(Debug, Parser)]
+pub struct WriteToDBArgs {
+    /// Input file (JSON) with the blockchain state.
+    #[arg(long)]
+    input: String,
 
+    /// RocksDB path to write the state to.
+    #[arg(long)]
+    db_path: String,
+}
+
+#[derive(Debug, Parser)]
 pub struct RecoverArgs {
     /// Ethereum RPC URL (archive preferred)
     #[arg(long)]
@@ -84,6 +95,7 @@ async fn main() -> Result<()> {
 
     match args.command {
         Command::Recover(args) => run_recover(args).await?,
+        Command::WriteToDB(args) => write_to_db(args)?,
     }
     Ok(())
 }
@@ -207,4 +219,24 @@ async fn get_commit_batches_from_range<P: Provider + Clone>(
     }
 
     Ok(results)
+}
+
+pub fn write_to_db(args: WriteToDBArgs) -> Result<()> {
+    let json = std::fs::read_to_string(&args.input)
+        .with_context(|| format!("read from {}", args.input))?;
+    let blockchain_state: BlockchainState =
+        serde_json::from_str(&json).context("parse blockchain state from JSON")?;
+
+    tracing::info!(
+        "Loaded blockchain state: {} batches, {} blocks, final tree root 0x{}",
+        blockchain_state.current_batch,
+        blockchain_state.current_block,
+        hex::encode(blockchain_state.tree.compute_root())
+    );
+
+    sequencer_db::write_to_db(&args.db_path, blockchain_state)?;
+
+    tracing::info!("Wrote blockchain state to RocksDB at {}", args.db_path);
+
+    Ok(())
 }

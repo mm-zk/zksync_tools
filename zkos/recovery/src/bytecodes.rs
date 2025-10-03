@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 
 use alloy::primitives::{B256, U256};
 use blake2::{Blake2s256, Digest};
@@ -136,7 +136,7 @@ pub struct BytecodeInfo {
 impl BytecodeInfo {
     pub fn parse(
         bytecode_info: &[u8],
-        factory_deps: &HashMap<B256, BytecodeAnalysisResults>,
+        factory_deps: &BTreeMap<B256, BytecodeAnalysisResults>,
     ) -> Self {
         if bytecode_info.len() != 96 {
             panic!("bytecode info wrong length: {}", bytecode_info.len());

@@ -24,7 +24,7 @@ pub struct GenesisInput {
 
 // load string from genesis.json and then parse.
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GenesisState {
     /// Storage logs for the genesis block.
     pub storage_logs: Vec<(B256, B256)>,
