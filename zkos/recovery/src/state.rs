@@ -1,7 +1,7 @@
 // Things related with state (tree etc).
-use std::collections::BTreeMap;
+use std::{collections::BTreeMap, io::Read};
 
-use alloy::primitives::{Address, B256, U256, address};
+use alloy::primitives::{Address, B256, Keccak256, U256, address};
 use blake2::{Blake2s256, Digest};
 use serde::{Deserialize, Serialize};
 use zk_os_basic_system::system_implementation::flat_storage_model::AccountProperties;
@@ -9,6 +9,7 @@ use zk_os_basic_system::system_implementation::flat_storage_model::AccountProper
 use crate::{
     BatchInfo, BlockInfo,
     chain_genesis::GenesisUpgradeLocalInfo,
+    contracts::{CommitBatchInfoZKsyncOS, StoredBatchInfo},
     state_genesis::GenesisState,
     statediffs::{self, ValueDiff},
 };
@@ -22,6 +23,8 @@ pub struct BlockchainState {
     pub current_block: u64,
     pub current_batch: u64,
     pub last_256_block_hashes: Vec<B256>,
+
+    pub last_batch_metadata: Option<BatchMetadata>,
 }
 
 impl BlockchainState {
@@ -41,6 +44,7 @@ impl BlockchainState {
             current_batch: 0,
             current_block: 0,
             last_256_block_hashes,
+            last_batch_metadata: None,
         }
     }
 
@@ -51,6 +55,7 @@ impl BlockchainState {
         // For now, only support cases with single batch per commit.
         assert_eq!(1, info.commits.len());
         let commit = &info.commits[0];
+        let start_block = self.current_block;
         for block_info in &info.blocks_data {
             self.apply_block(block_info);
         }
@@ -86,13 +91,54 @@ impl BlockchainState {
             "Computed state commitment: 0x{}",
             hex::encode(state_commitment)
         );
-
         // Safety check that commitment matches.
         assert_eq!(
             commit.newStateCommitment, state_commitment,
             "State commitment mismatch on batch {}",
             batch_number
         );
+
+        /*if batch_number > 2 {
+            // HACK HACK HACK -- we ignore genesis (I'm lazy) and we ignore batches with ugprades (and that's serious).
+            // We're missing info about upgrade tx.
+            assert_eq!(self.last_stored_batch_info, info.stored);
+        }
+
+        // now convert 'commit' into batch info
+        self.last_stored_batch_info = commit_batch_info_to_stored_batch_info(commit);*/
+
+        self.last_batch_metadata = Some(BatchMetadata {
+            previous_stored_batch_info: FriendlyStoredBatchInfo {
+                batch_number: info.stored.batchNumber,
+                state_commitment: info.stored.batchHash,
+                number_of_layer1_txs: info.stored.numberOfLayer1Txs.try_into().unwrap(),
+                priority_operations_hash: info.stored.priorityOperationsHash,
+                dependency_roots_rolling_hash: info.stored.dependencyRootsRollingHash,
+                l2_to_l1_logs_root_hash: info.stored.l2LogsTreeRoot,
+                commitment: info.stored.commitment,
+                // this is not really used.
+                last_block_timestamp: commit.lastBlockTimestamp,
+            },
+            commit_batch_info: CommitBatchInfo {
+                batch_number: commit.batchNumber,
+                new_state_commitment: commit.newStateCommitment,
+                number_of_layer1_txs: commit.numberOfLayer1Txs.try_into().unwrap(),
+                priority_operations_hash: commit.priorityOperationsHash,
+                dependency_roots_rolling_hash: commit.dependencyRootsRollingHash,
+                l2_to_l1_logs_root_hash: commit.l2LogsTreeRoot,
+                l2_da_validator: commit.l2DaValidator,
+                da_commitment: commit.daCommitment,
+                first_block_timestamp: commit.firstBlockTimestamp,
+                last_block_timestamp: commit.lastBlockTimestamp,
+                chain_id: commit.chainId.try_into().unwrap(),
+                chain_address: Address::ZERO, // HACK HACK HACK -- we don't have this info
+                operator_da_input: commit.operatorDAInput.to_vec(),
+                upgrade_tx_hash: None, // HACK HACK HACK -- we don't have this info
+            },
+            first_block_number: start_block + 1,
+            last_block_number: self.current_block,
+            tx_count: 15, // HACK HACK HACK -- we don't have this info
+        });
     }
 
     pub fn apply_block(&mut self, block_info: &BlockInfo) {
@@ -471,4 +517,73 @@ mod tests {
                 .unwrap();
         assert_eq!(commitment, expected_commitment);
     }
+}
+
+pub fn commit_batch_info_to_stored_batch_info(commit: &CommitBatchInfoZKsyncOS) -> StoredBatchInfo {
+    let commitment = {
+        let mut hasher = Keccak256::new();
+        hasher.update(U256::from(commit.chainId).to_be_bytes::<32>());
+        hasher.update(&commit.firstBlockTimestamp.to_be_bytes());
+        hasher.update(&commit.lastBlockTimestamp.to_be_bytes());
+        hasher.update(commit.l2DaValidator.0.0);
+        hasher.update(commit.daCommitment.0);
+        hasher.update(commit.numberOfLayer1Txs.to_be_bytes::<32>());
+        hasher.update(commit.priorityOperationsHash.0);
+        hasher.update(commit.l2LogsTreeRoot.0);
+        //FIXME: hasher.update(commit.upgradeTxHash.as_u8_ref()); -- issue!!
+        hasher.update(B256::ZERO.0); // upgradeTxHash is zero in zkSync OS
+        hasher.update(commit.dependencyRootsRollingHash.0);
+        hasher.finalize()
+    };
+
+    // Based of zksync-os-server l1-sender commitment.rs
+    StoredBatchInfo {
+        batchNumber: commit.batchNumber,
+        batchHash: commit.newStateCommitment,
+        indexRepeatedStorageChanges: 0u64, // not used
+        numberOfLayer1Txs: commit.numberOfLayer1Txs,
+        priorityOperationsHash: commit.priorityOperationsHash,
+        dependencyRootsRollingHash: commit.dependencyRootsRollingHash,
+        l2LogsTreeRoot: commit.l2LogsTreeRoot, //??
+        timestamp: U256::from(0),              // not used
+        commitment,
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct FriendlyStoredBatchInfo {
+    pub batch_number: u64,
+    pub state_commitment: B256,
+    pub number_of_layer1_txs: u64,
+    pub priority_operations_hash: B256,
+    pub dependency_roots_rolling_hash: B256,
+    pub l2_to_l1_logs_root_hash: B256,
+    pub commitment: B256,
+    pub last_block_timestamp: u64,
+}
+
+#[derive(Clone, Serialize, Deserialize, Debug)]
+pub struct CommitBatchInfo {
+    pub batch_number: u64,
+    pub new_state_commitment: B256,
+    pub number_of_layer1_txs: u64,
+    pub priority_operations_hash: B256,
+    pub dependency_roots_rolling_hash: B256,
+    pub l2_to_l1_logs_root_hash: B256,
+    pub l2_da_validator: Address,
+    pub da_commitment: B256,
+    pub first_block_timestamp: u64,
+    pub last_block_timestamp: u64,
+    pub chain_id: u64,
+    pub chain_address: Address,
+    pub operator_da_input: Vec<u8>,
+    pub upgrade_tx_hash: Option<B256>,
+}
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct BatchMetadata {
+    pub previous_stored_batch_info: FriendlyStoredBatchInfo,
+    pub commit_batch_info: CommitBatchInfo,
+    pub first_block_number: u64,
+    pub last_block_number: u64,
+    pub tx_count: usize,
 }

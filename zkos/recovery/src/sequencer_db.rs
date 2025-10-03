@@ -186,6 +186,16 @@ pub fn write_to_db(db_path: &String, blockchain_state: BlockchainState) -> Resul
         )
         .with_context(|| "write latest block to wal_db")?;
 
+    // serialized last stored batch info to a file
+    let last_batch_metadata = &blockchain_state.last_batch_metadata;
+    let last_batch_metadata_bytes = serde_json::to_vec(last_batch_metadata)
+        .context("failed to serialize last batch metadata")?;
+    std::fs::write(
+        PathBuf::from(db_path).join("last_batch_metadata.json"),
+        last_batch_metadata_bytes,
+    )
+    .context("failed to write last batch metadata to file")?;
+
     Ok(())
 }
 

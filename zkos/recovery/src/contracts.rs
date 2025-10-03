@@ -1,4 +1,5 @@
 use alloy::sol;
+use serde::{Deserialize, Serialize};
 
 sol! {
     #[derive(Debug)]
@@ -55,7 +56,7 @@ sol! {
         bytes[] _factoryDeps
     );
 
-    #[derive(Debug)]
+    #[derive(Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
     struct StoredBatchInfo {
         uint64 batchNumber;
         bytes32 batchHash;

@@ -13,6 +13,10 @@ alloy = { version = "1", features = [
 "rpc-types", # Block/Tx types & enums
 "sol-types", # ABI types + sol! macro
 "contract", # helpers
+"serde",
+"serde-bincode-compat",
+"eips",
+"rlp"
 ] }
 hex = "0.4"
 
@@ -23,6 +27,13 @@ blake2 = "0.10.6"
 
 tracing = "0.1"
 tracing-subscriber = { version="0.3", features=["env-filter"]}
+bincode = { version = "2.0.1", features = ["serde"] }
+
+
+
+rocksdb = "0.23.0"
+alloy-rlp = { version = "0.3.12" }
+leb128 = "0.2.5"
 
 
 # Decide long term if needed.
