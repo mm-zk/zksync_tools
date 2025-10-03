@@ -24,7 +24,7 @@ pub struct BlockchainState {
     pub current_batch: u64,
     pub last_256_block_hashes: Vec<B256>,
 
-    pub last_batch_metadata: Option<BatchMetadata>,
+    pub batches_metadata: Vec<BatchMetadata>,
 }
 
 impl BlockchainState {
@@ -44,7 +44,7 @@ impl BlockchainState {
             current_batch: 0,
             current_block: 0,
             last_256_block_hashes,
-            last_batch_metadata: None,
+            batches_metadata: vec![],
         }
     }
 
@@ -107,7 +107,7 @@ impl BlockchainState {
         // now convert 'commit' into batch info
         self.last_stored_batch_info = commit_batch_info_to_stored_batch_info(commit);*/
 
-        self.last_batch_metadata = Some(BatchMetadata {
+        self.batches_metadata.push(BatchMetadata {
             previous_stored_batch_info: FriendlyStoredBatchInfo {
                 batch_number: info.stored.batchNumber,
                 state_commitment: info.stored.batchHash,

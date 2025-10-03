@@ -4,8 +4,9 @@ use alloy::rlp::Encodable;
 use alloy::{consensus::Block, primitives::B256};
 use anyhow::{Context, Result};
 use rocksdb::DB;
+use serde::{Deserialize, Serialize};
 
-use crate::state::{BlockchainState, hash_leaf};
+use crate::state::{BatchMetadata, BlockchainState, hash_leaf};
 use bincode::{Decode, Encode};
 
 // Data from priority tree that we cache in the database.
@@ -186,16 +187,36 @@ pub fn write_to_db(db_path: &String, blockchain_state: BlockchainState) -> Resul
         )
         .with_context(|| "write latest block to wal_db")?;
 
-    // serialized last stored batch info to a file
-    let last_batch_metadata = &blockchain_state.last_batch_metadata;
-    let last_batch_metadata_bytes = serde_json::to_vec(last_batch_metadata)
-        .context("failed to serialize last batch metadata")?;
-    std::fs::write(
-        PathBuf::from(db_path).join("last_batch_metadata.json"),
-        last_batch_metadata_bytes,
-    )
-    .context("failed to write last batch metadata to file")?;
+    // Now dump batches metadata with 'fake'(empty) proofs. As we are using this for batch/block matching.
 
+    for batch_metadata in &blockchain_state.batches_metadata {
+        let local_batch_envelope = LocalBatchEnvelope {
+            batch: batch_metadata.clone(),
+            data: FriProof::Fake,
+        };
+        let stored_batch = StoredBatch::V1(local_batch_envelope);
+        let batch_number = batch_metadata.commit_batch_info.batch_number;
+        let serialized = serde_json::to_vec(&stored_batch)
+            .with_context(|| format!("serialize StoredBatch for batch {}", batch_number))?;
+
+        // write to file in fri_batch_envelopes directory with fri_batch_envelopes_{batch_number}.json and create
+        // dir if not present.
+        let fri_batch_envelopes_dir = PathBuf::from(db_path)
+            .parent()
+            .unwrap()
+            .join("shared")
+            .join("fri_batch_envelopes");
+        std::fs::create_dir_all(&fri_batch_envelopes_dir)
+            .with_context(|| format!("create directory {}", fri_batch_envelopes_dir.display()))?;
+        let file_path =
+            fri_batch_envelopes_dir.join(format!("fri_batch_envelope_{batch_number}.json"));
+        std::fs::write(&file_path, &serialized).with_context(|| {
+            format!(
+                "write StoredBatch to file {}",
+                file_path.as_path().display()
+            )
+        })?;
+    }
     Ok(())
 }
 
@@ -538,4 +559,22 @@ impl InsertedKeyEntry {
         leb128::write::unsigned(buffer, self.index).unwrap();
         leb128::write::unsigned(buffer, self.inserted_at).unwrap();
     }
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[non_exhaustive]
+pub enum StoredBatch {
+    V1(LocalBatchEnvelope),
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct LocalBatchEnvelope {
+    pub batch: BatchMetadata,
+    pub data: FriProof,
+}
+
+#[derive(Clone, Serialize, Deserialize, Debug)]
+pub enum FriProof {
+    // Fake proof for testing purposes
+    Fake,
 }
