@@ -1,5 +1,5 @@
 // Things related with state (tree etc).
-use std::{collections::BTreeMap, io::Read};
+use std::collections::BTreeMap;
 
 use alloy::primitives::{Address, B256, Keccak256, U256, address};
 use blake2::{Blake2s256, Digest};

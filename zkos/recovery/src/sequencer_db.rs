@@ -1,5 +1,6 @@
 use std::path::PathBuf;
 
+use alloy::primitives::{Address, U256};
 use alloy::rlp::Encodable;
 use alloy::{consensus::Block, primitives::B256};
 use anyhow::{Context, Result};
@@ -26,9 +27,18 @@ pub fn write_to_db(db_path: &String, blockchain_state: BlockchainState) -> Resul
         .with_context(|| format!("open RocksDB at {}", db_path))?;
 
     // create column family in wal_db
-    wal_db
-        .create_cf("latest", &rocksdb::Options::default())
-        .with_context(|| "create column family 'latest' in wal_db")?;
+    for cf_name in [
+        "latest",
+        "context",
+        "last_processed_l1_tx_id",
+        "txs",
+        "node_version",
+        "block_output_hash",
+    ] {
+        wal_db
+            .create_cf(cf_name, &rocksdb::Options::default())
+            .with_context(|| format!("create column family '{cf_name}' in wal_db"))?;
+    }
 
     let state_path = PathBuf::from(db_path).join("state");
 
@@ -176,6 +186,14 @@ pub fn write_to_db(db_path: &String, blockchain_state: BlockchainState) -> Resul
             .with_context(|| "write storage log to state_db")?;
     }
 
+    // TODO: should this be +1 ??
+    let current_block = blockchain_state.current_block + 1;
+    tracing::info!(
+        "Run the sequencer with general_force_starting_block_number={:?}",
+        current_block
+    );
+    let current_block_key = current_block.to_be_bytes();
+
     let latest_cf = wal_db.cf_handle("latest").unwrap();
 
     //  insert latest block into column family 'latest' in wal_db
@@ -186,6 +204,60 @@ pub fn write_to_db(db_path: &String, blockchain_state: BlockchainState) -> Resul
             blockchain_state.current_block.to_be_bytes(),
         )
         .with_context(|| "write latest block to wal_db")?;
+
+    // And put the rest of 'replay record' data (unfortunately we don't have all of it).
+
+    let block_output_hash_cf = wal_db.cf_handle("block_output_hash").unwrap();
+    wal_db.put_cf(
+        block_output_hash_cf,
+        current_block_key,
+        &blockchain_state.last_256_block_hashes.last().unwrap(),
+    )?;
+    let node_version_cf = wal_db.cf_handle("node_version").unwrap();
+
+    // TODO: add info that this is a recovery.
+    let node_version = semver::Version::new(0, 0, 0);
+
+    let node_version_value = node_version.to_string().as_bytes().to_vec();
+
+    wal_db.put_cf(node_version_cf, current_block_key, &node_version_value)?;
+    let last_processed_l1_tx_id_cf = wal_db.cf_handle("last_processed_l1_tx_id").unwrap();
+
+    // TODO: fixme.
+    let starting_l1_priority_id = 1000u64;
+
+    let starting_l1_tx_id_value =
+        bincode::serde::encode_to_vec(starting_l1_priority_id, bincode::config::standard())
+            .expect("Failed to serialize record.last_processed_l1_tx_id");
+
+    wal_db.put_cf(
+        last_processed_l1_tx_id_cf,
+        current_block_key,
+        &starting_l1_tx_id_value,
+    )?;
+
+    let txs_cf = wal_db.cf_handle("txs").unwrap();
+    // Tx results will be empty (as we don't know).
+    let transactions: Vec<u64> = vec![];
+    let txs_value = bincode::encode_to_vec(transactions, bincode::config::standard())
+        .expect("Failed to serialize record.transactions");
+
+    // let's see if this is going to work.
+    wal_db.put_cf(txs_cf, current_block_key, &txs_value)?;
+
+    let context_cf = wal_db.cf_handle("context").unwrap();
+
+    let mut block_context = BlockContext::default();
+    for (i, hash) in blockchain_state.last_256_block_hashes.iter().enumerate() {
+        block_context.block_hashes.0[i] = U256::from_be_bytes(hash.0);
+    }
+    block_context.block_number = current_block;
+    // TODO: what about other fields in here.
+
+    let context_value = bincode::serde::encode_to_vec(block_context, bincode::config::standard())
+        .expect("Failed to serialize record.context");
+
+    wal_db.put_cf(context_cf, current_block_key, &context_value)?;
 
     // Now dump batches metadata with 'fake'(empty) proofs. As we are using this for batch/block matching.
 
@@ -577,4 +649,55 @@ pub struct LocalBatchEnvelope {
 pub enum FriProof {
     // Fake proof for testing purposes
     Fake,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Default, Serialize, Deserialize)]
+pub struct BlockContext {
+    // Chain id is temporarily also added here (so that it can be easily passed from the oracle)
+    // long term, we have to decide whether we want to keep it here, or add a separate oracle
+    // type that would return some 'chain' specific metadata (as this class is supposed to hold block metadata only).
+    pub chain_id: u64,
+    pub block_number: u64,
+    pub block_hashes: BlockHashes,
+    pub timestamp: u64,
+    pub eip1559_basefee: U256,
+    pub gas_per_pubdata: U256,
+    pub native_price: U256,
+    pub coinbase: Address,
+    pub gas_limit: u64,
+    pub pubdata_limit: u64,
+    /// Source of randomness, currently holds the value
+    /// of prevRandao.
+    pub mix_hash: U256,
+    /// Version of the ZKsync OS and its config to be used for this block.
+    pub execution_version: u32,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct BlockHashes(pub [U256; 256]);
+impl Default for BlockHashes {
+    fn default() -> Self {
+        Self([U256::ZERO; 256])
+    }
+}
+impl serde::Serialize for BlockHashes {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        self.0.to_vec().serialize(serializer)
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for BlockHashes {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let vec: Vec<U256> = Vec::deserialize(deserializer)?;
+        let array: [U256; 256] = vec
+            .try_into()
+            .map_err(|_| serde::de::Error::custom("Expected array of length 256"))?;
+        Ok(Self(array))
+    }
 }
