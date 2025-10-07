@@ -25,9 +25,9 @@ checkout_tag() {
 local tag="$1"
 # Ensure tag exists locally; fetch tags first to be safe
 git fetch --tags --prune --force
-#if ! git rev-parse -q --verify "refs/tags/$tag" >/dev/null; then
-#err "Tag '$tag' not found in repo $(pwd)"; return 1
-#fi
+if ! git rev-parse -q --verify "refs/tags/$tag" >/dev/null; then
+err "Tag '$tag' not found in repo $(pwd)"; return 1
+fi
 # Checkout in detached HEAD to avoid moving any branch
 git -c advice.detachedHead=false checkout --detach "$tag"
 }
