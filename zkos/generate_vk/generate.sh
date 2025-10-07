@@ -25,9 +25,9 @@ checkout_tag() {
 local tag="$1"
 # Ensure tag exists locally; fetch tags first to be safe
 git fetch --tags --prune --force
-if ! git rev-parse -q --verify "refs/tags/$tag" >/dev/null; then
-err "Tag '$tag' not found in repo $(pwd)"; return 1
-fi
+#if ! git rev-parse -q --verify "refs/tags/$tag" >/dev/null; then
+#err "Tag '$tag' not found in repo $(pwd)"; return 1
+#fi
 # Checkout in detached HEAD to avoid moving any branch
 git -c advice.detachedHead=false checkout --detach "$tag"
 }
@@ -120,6 +120,36 @@ clone_and_tag() {
     return 0
 }
 
+download_zksync_os_binary() {
+  local asset_name="$1"
+  local tag="${2:-latest}"
+  local target_path="${3:-.}"
+
+  if [[ -z "$asset_name" ]]; then
+    printf "Usage: download_zksync_os_binary <asset_name> [tag] [target_path]"
+    return 1
+  fi
+
+  local asset_url="https://github.com/matter-labs/zksync-os/releases/download/${tag}/${asset_name}"
+
+  mkdir -p "$target_path" || {
+    printf "❌ Failed to create directory: $target_path"
+    return 1
+  }
+
+  local output_file="${target_path%/}/$asset_name"
+
+  http_status=$(curl -sL -w "%{http_code}" -o "$output_file" "$asset_url")
+
+  if [[ "$http_status" != "200" ]]; then
+    printf "❌ Download of ${output_file} failed with HTTP status: $http_status\n"
+    rm -f "$output_file"
+    return 1
+  fi
+
+  printf "✅ Downloaded binary: $output_file\n"
+}
+
 
 create_snark_vk() {
     # remove snark_vk_expected.json if exists
@@ -127,7 +157,7 @@ create_snark_vk() {
         rm "repos/snark_vk_expected.json"
     fi
     pushd "repos/zkos-wrapper" >/dev/null
-    cargo run --bin wrapper --release -- generate-snark-vk --input-binary ../zksync-os/zksync_os/multiblock_batch.bin --trusted-setup-file ../setup.key --output-dir ../
+    cargo run --bin wrapper --release -- generate-snark-vk --input-binary ../../$env_dir/binaries/multiblock_batch.bin --trusted-setup-file ../setup.key --output-dir ../
     popd >/dev/null
 
     # check that snark_vk_expected.json is present
@@ -183,6 +213,9 @@ clone_and_tag git@github.com:matter-labs/era-contracts.git "repos/era-contracts"
 printf "*** Downloading CRS ***\n"
 
 download_crs
+
+printf "*** Downloading ZKsync OS binary ***\n"
+download_zksync_os_binary "multiblock_batch.bin" "$ZKSYNC_OS_TAG" "$env_dir/binaries"
 
 printf "*** Generating snark key ***\n"
 create_snark_vk
