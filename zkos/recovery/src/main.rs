@@ -12,11 +12,8 @@ use tracing::level_filters::LevelFilter;
 use tracing_subscriber::EnvFilter;
 
 use crate::{
-    chain_genesis::get_genesis_upgrade,
-    contracts::BlockCommit,
-    state::BlockchainState,
-    state_genesis::init_genesis,
-    statediffs::BatchInfo,
+    chain_genesis::get_genesis_upgrade, contracts::BlockCommit, state::BlockchainState,
+    state_genesis::init_genesis, statediffs::BatchInfo,
 };
 
 pub mod bytecodes;
@@ -37,7 +34,6 @@ struct Cli {
 }
 
 #[derive(Debug, Subcommand)]
-
 pub enum Command {
     /// Recover state from L1, check correctness and optionally write to json file.
     Recover(RecoverArgs),
@@ -53,6 +49,10 @@ pub struct WriteToDBArgs {
     /// RocksDB path to write the state to.
     #[arg(long)]
     db_path: String,
+
+    /// WriteBatch chunk size (number of entries per batch)
+    #[arg(long, default_value_t = 100_000)]
+    batch_size: usize,
 }
 
 #[derive(Debug, Parser)]
@@ -171,8 +171,7 @@ async fn run_recover(args: RecoverArgs) -> Result<()> {
 
     // Resolve diamond proxy address
     let target = if let Some(address) = args.address {
-        Address::from_str(&address)
-            .with_context(|| format!("invalid address: {}", address))?
+        Address::from_str(&address).with_context(|| format!("invalid address: {}", address))?
     } else if let (Some(bridgehub_str), Some(chain_id)) = (args.bridgehub, args.chain_id) {
         tracing::info!("Auto-discovering diamond proxy from L1 bridgehub");
 
@@ -186,7 +185,9 @@ async fn run_recover(args: RecoverArgs) -> Result<()> {
 
         diamond_proxy
     } else {
-        bail!("Either --address must be provided, or both --bridgehub and --chain-id for auto-discovery");
+        bail!(
+            "Either --address must be provided, or both --bridgehub and --chain-id for auto-discovery"
+        );
     };
 
     // Resolve default bounds
@@ -209,16 +210,19 @@ async fn run_recover(args: RecoverArgs) -> Result<()> {
     );
 
     // First - try to find genesis upgrade event (should be somewhere at the beginning).
-    let genesis_local_info = get_genesis_upgrade(&provider, target, from, to, args.chunk, args.concurrency).await?;
+    let genesis_local_info =
+        get_genesis_upgrade(&provider, target, from, to, args.chunk, args.concurrency).await?;
 
     // Now we can create initial blockchain state.
     let mut blockchain_state = BlockchainState::new(genesis.clone(), genesis_local_info);
 
     // Phase 1: Scan for CommitBatches events
-    let all_logs_with_hashes = scan_commit_events(&provider, target, from, to, args.chunk, args.concurrency).await?;
+    let all_logs_with_hashes =
+        scan_commit_events(&provider, target, from, to, args.chunk, args.concurrency).await?;
 
     // Phase 2: Fetch transactions and decode batches
-    let all_batches = fetch_and_decode_batches(&provider, all_logs_with_hashes, args.concurrency).await?;
+    let all_batches =
+        fetch_and_decode_batches(&provider, all_logs_with_hashes, args.concurrency).await?;
 
     // Apply batches in order after all chunks are collected
     let mut batch_numbers = all_batches.keys().cloned().collect::<Vec<_>>();
@@ -276,9 +280,7 @@ async fn scan_commit_events<P: Provider + Clone>(
     let mut chunk_stream = stream::iter(chunk_ranges)
         .map(|(start, end)| {
             let provider = provider.clone();
-            async move {
-                get_commit_batches_from_range(&provider, target, start, end).await
-            }
+            async move { get_commit_batches_from_range(&provider, target, start, end).await }
         })
         .buffer_unordered(concurrency);
 
@@ -411,9 +413,7 @@ async fn get_commit_batches_from_range<P: Provider + Clone>(
     // Collect logs with their transaction hashes
     let results: Vec<_> = logs
         .into_iter()
-        .filter_map(|log| {
-            log.transaction_hash.map(|hash| (hash, log))
-        })
+        .filter_map(|log| log.transaction_hash.map(|hash| (hash, log)))
         .collect();
 
     Ok(results)
@@ -432,7 +432,7 @@ pub fn write_to_db(args: WriteToDBArgs) -> Result<()> {
         hex::encode(blockchain_state.tree.compute_root())
     );
 
-    sequencer_db::write_to_db(&args.db_path, blockchain_state)?;
+    sequencer_db::write_to_db(&args.db_path, blockchain_state, args.batch_size)?;
 
     tracing::info!("Wrote blockchain state to RocksDB at {}", args.db_path);
 

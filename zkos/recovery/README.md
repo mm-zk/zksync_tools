@@ -64,6 +64,11 @@ cargo run -- write-to-db \
   --db-path <DB_PATH>
 ```
 
+**`--batch-size`** (default: 100,000)
+- Number of entries per RocksDB WriteBatch operation
+- WriteBatch groups multiple writes into atomic operations for performance improvement
+- Higher values = faster writes but more memory usage
+
 The command will output the starting block number for the sequencer:
 
 ```shell

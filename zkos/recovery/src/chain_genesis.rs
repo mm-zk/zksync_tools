@@ -56,9 +56,7 @@ pub async fn get_genesis_upgrade<P: Provider + Clone>(
     let mut stream = stream::iter(chunk_ranges)
         .map(|(start, end)| {
             let provider = provider.clone();
-            async move {
-                scan_genesis_upgrade(&provider, diamond_proxy_address, start, end).await
-            }
+            async move { scan_genesis_upgrade(&provider, diamond_proxy_address, start, end).await }
         })
         .buffer_unordered(concurrency);
 

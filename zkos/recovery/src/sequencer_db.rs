@@ -20,7 +20,11 @@ pub struct CachedTreeData {
     pub cache: Vec<Option<B256>>,
 }
 
-pub fn write_to_db(db_path: &String, blockchain_state: BlockchainState) -> Result<()> {
+pub fn write_to_db(
+    db_path: &String,
+    blockchain_state: BlockchainState,
+    write_batch_chunk_size: usize,
+) -> Result<()> {
     let wal_path = PathBuf::from(db_path).join("block_replay_wal");
 
     let mut wal_db = rocksdb::DB::open_default(wal_path)
@@ -61,12 +65,16 @@ pub fn write_to_db(db_path: &String, blockchain_state: BlockchainState) -> Resul
         &blockchain_state.current_block.to_be_bytes(),
     )?;
 
-    for (k, v) in blockchain_state.preimage_store.iter() {
-        preimages_db.put_cf(
-            preimages_db.cf_handle("storage").unwrap(),
-            k.as_slice(),
-            v.as_slice(),
-        )?;
+    // Use WriteBatch for bulk preimage inserts (chunked to avoid OOM)
+    let storage_cf = preimages_db.cf_handle("storage").unwrap();
+    let preimages: Vec<_> = blockchain_state.preimage_store.iter().collect();
+
+    for chunk in preimages.chunks(write_batch_chunk_size) {
+        let mut batch = rocksdb::WriteBatch::default();
+        for (k, v) in chunk {
+            batch.put_cf(storage_cf, k.as_slice(), v.as_slice());
+        }
+        preimages_db.write(batch)?;
     }
 
     let tree_path = PathBuf::from(db_path).join("tree");
@@ -79,7 +87,7 @@ pub fn write_to_db(db_path: &String, blockchain_state: BlockchainState) -> Resul
             .with_context(|| format!("create column family '{cf_name}' in tree_db"))?;
     }
 
-    init_tree_in_rocksdb(&blockchain_state, &mut tree_db).unwrap();
+    init_tree_in_rocksdb(&blockchain_state, &mut tree_db, write_batch_chunk_size).unwrap();
 
     let repository_path = PathBuf::from(db_path).join("repository");
     let mut repository_db = rocksdb::DB::open_default(repository_path)
@@ -177,13 +185,15 @@ pub fn write_to_db(db_path: &String, blockchain_state: BlockchainState) -> Resul
         )
         .with_context(|| "write base block to state_db")?;
 
-    // insert all the states.
-    for leaf in blockchain_state.tree.leaves.iter() {
-        let k = leaf.key;
-        let v = leaf.value;
+    // insert all the states using chunked WriteBatch
+    for chunk in blockchain_state.tree.leaves.chunks(write_batch_chunk_size) {
+        let mut batch = rocksdb::WriteBatch::default();
+        for leaf in chunk {
+            batch.put_cf(state_storage_cf, leaf.key.as_slice(), leaf.value.as_slice());
+        }
         state_db
-            .put_cf(state_storage_cf, k.as_slice(), v.as_slice())
-            .with_context(|| "write storage log to state_db")?;
+            .write(batch)
+            .with_context(|| "write storage logs to state_db")?;
     }
 
     // TODO: should this be +1 ??
@@ -260,7 +270,6 @@ pub fn write_to_db(db_path: &String, blockchain_state: BlockchainState) -> Resul
     wal_db.put_cf(context_cf, current_block_key, &context_value)?;
 
     // Now dump batches metadata with 'fake'(empty) proofs. As we are using this for batch/block matching.
-
     for batch_metadata in &blockchain_state.batches_metadata {
         let local_batch_envelope = LocalBatchEnvelope {
             batch: batch_metadata.clone(),
@@ -350,7 +359,11 @@ impl TreeTags {
 
 pub const LEAF_NIBBLES: u8 = 22; // div_ceil(64 / 3)
 
-fn init_tree_in_rocksdb(blockchain_state: &BlockchainState, tree_db: &mut DB) -> Result<()> {
+fn init_tree_in_rocksdb(
+    blockchain_state: &BlockchainState,
+    tree_db: &mut DB,
+    write_batch_chunk_size: usize,
+) -> Result<()> {
     // First - put manifest.
     let manifest = Manifest {
         version_count: blockchain_state.current_block + 1, // TODO: explain why +1.
@@ -385,26 +398,36 @@ fn init_tree_in_rocksdb(blockchain_state: &BlockchainState, tree_db: &mut DB) ->
         );
     }*/
 
-    // Then - put all leaves.
-    for (i, original_leaf) in blockchain_state.tree.leaves.iter().enumerate() {
-        let node_key = NodeKey {
-            version: entries_version,
-            nibble_count: LEAF_NIBBLES,
-            index_on_level: i as u64,
-        };
-        let key = node_key.as_db_key();
-        let mut buffer = vec![];
+    // Then - put all leaves using chunked WriteBatch
+    for (chunk_idx, chunk) in blockchain_state
+        .tree
+        .leaves
+        .chunks(write_batch_chunk_size)
+        .enumerate()
+    {
+        let mut batch = rocksdb::WriteBatch::default();
+        for (i, original_leaf) in chunk.iter().enumerate() {
+            let global_index = (chunk_idx * write_batch_chunk_size) + i;
+            let node_key = NodeKey {
+                version: entries_version,
+                nibble_count: LEAF_NIBBLES,
+                index_on_level: global_index as u64,
+            };
+            let key = node_key.as_db_key();
+            let mut buffer = vec![];
 
-        // TODO: cleanup.
-        let local_leaf = Leaf {
-            key: original_leaf.key,
-            value: original_leaf.value,
-            next_index: original_leaf.next_index,
-        };
+            // TODO: cleanup.
+            let local_leaf = Leaf {
+                key: original_leaf.key,
+                value: original_leaf.value,
+                next_index: original_leaf.next_index,
+            };
 
-        local_leaf.serialize(&mut buffer);
+            local_leaf.serialize(&mut buffer);
 
-        tree_db.put(key, &buffer).unwrap();
+            batch.put(key, &buffer);
+        }
+        tree_db.write(batch).unwrap();
     }
 
     let mut hashes = blockchain_state
@@ -432,6 +455,7 @@ fn init_tree_in_rocksdb(blockchain_state: &BlockchainState, tree_db: &mut DB) ->
             nodes_at_level
         );
         let mut nodes = vec![];
+        let mut batch = rocksdb::WriteBatch::default();
         for index_on_level in 0..nodes_at_level {
             let node_key = NodeKey {
                 version: entries_version,
@@ -454,7 +478,7 @@ fn init_tree_in_rocksdb(blockchain_state: &BlockchainState, tree_db: &mut DB) ->
             }
             let internal_node = InternalNode { children };
             internal_node.serialize(&mut buffer);
-            tree_db.put(key, &buffer).unwrap();
+            batch.put(key, &buffer);
             nodes.push(internal_node.clone());
 
             // now let's compute the hash of this internal node.
@@ -474,6 +498,9 @@ fn init_tree_in_rocksdb(blockchain_state: &BlockchainState, tree_db: &mut DB) ->
             }
             new_hashes.push(sub_hashes[0]);
         }
+
+        // Write all nodes for this level at once
+        tree_db.write(batch).unwrap();
 
         for _ in 0..level_multiplier_log {
             current_zero = crate::state::compress(&current_zero, &current_zero);
@@ -504,21 +531,31 @@ fn init_tree_in_rocksdb(blockchain_state: &BlockchainState, tree_db: &mut DB) ->
     // Small sanity check.
     assert_eq!(hashes[0], blockchain_state.tree.compute_root());
 
-    // And now indices.
+    // And now indices using chunked WriteBatch
 
     let indices_cf = tree_db.cf_handle("key_indices").unwrap();
 
-    for (i, leaf) in blockchain_state.tree.leaves.iter().enumerate() {
-        let key = leaf.key;
+    for (chunk_idx, chunk) in blockchain_state
+        .tree
+        .leaves
+        .chunks(write_batch_chunk_size)
+        .enumerate()
+    {
+        let mut batch = rocksdb::WriteBatch::default();
+        for (i, leaf) in chunk.iter().enumerate() {
+            let global_index = (chunk_idx * write_batch_chunk_size) + i;
+            let key = leaf.key;
 
-        let inserted_entry = InsertedKeyEntry {
-            index: i as u64,
-            inserted_at: entries_version,
-        };
-        let mut data = vec![];
-        inserted_entry.serialize(&mut data);
+            let inserted_entry = InsertedKeyEntry {
+                index: global_index as u64,
+                inserted_at: entries_version,
+            };
+            let mut data = vec![];
+            inserted_entry.serialize(&mut data);
 
-        tree_db.put_cf(indices_cf, key.as_slice(), &data)?;
+            batch.put_cf(indices_cf, key.as_slice(), &data);
+        }
+        tree_db.write(batch)?;
     }
 
     Ok(())
