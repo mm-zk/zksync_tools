@@ -1,7 +1,7 @@
 use std::{collections::HashMap, str::FromStr};
 
 use alloy::{
-    primitives::{Address, B256},
+    primitives::Address,
     providers::{Provider, ProviderBuilder},
     rpc::types::Filter,
     sol_types::SolEvent, // for ABI-safe decoding of the commit function
@@ -86,12 +86,8 @@ pub struct RecoverArgs {
     #[arg(long, default_value_t = 2_000u64)]
     chunk: u64,
 
-    /// Transaction batch size (number of transactions to fetch concurrently).
-    #[arg(long, default_value_t = 1)]
-    tx_batch_size: usize,
-
-    /// Event scan concurrency (number of chunks to scan in parallel for events).
-    #[arg(long, default_value_t = 1)]
+    /// Concurrency (number of chunks to scan in parallel).
+    #[arg(long, default_value_t = 10)]
     concurrency: usize,
 
     /// Output file (JSON). If omitted, prints summary to stdout.
@@ -218,54 +214,20 @@ async fn run_recover(args: RecoverArgs) -> Result<()> {
     // Now we can create initial blockchain state.
     let mut blockchain_state = BlockchainState::new(genesis.clone(), genesis_local_info);
 
-    // Then start scanning for 'CommitBatches' call, and collecting the state.
-    let chunks_total = (to - from) / args.chunk + 1;
-    tracing::info!(
-        "Scanning for CommitBatches events: {} total chunks (concurrency={})",
-        chunks_total,
-        args.concurrency
-    );
+    // Phase 1: Scan for CommitBatches events
+    let all_logs_with_hashes = scan_commit_events(&provider, target, from, to, args.chunk, args.concurrency).await?;
 
-    use futures::stream::{self, StreamExt};
+    // Phase 2: Fetch transactions and decode batches
+    let all_batches = fetch_and_decode_batches(&provider, all_logs_with_hashes, args.concurrency).await?;
 
-    let chunk_ranges: Vec<_> = (0..chunks_total)
-        .map(|i| {
-            let start = from + (i * args.chunk);
-            let end = (start + args.chunk - 1).min(to);
-            (start, end)
-        })
-        .collect();
+    // Apply batches in order after all chunks are collected
+    let mut batch_numbers = all_batches.keys().cloned().collect::<Vec<_>>();
+    batch_numbers.sort_unstable();
 
-    let mut stream = stream::iter(chunk_ranges)
-        .map(|(start, end)| {
-            let provider = provider.clone();
-            async move {
-                get_commit_batches_from_range(&provider, target, start, end, args.tx_batch_size).await
-            }
-        })
-        .buffer_unordered(args.concurrency);
-
-    let mut chunks_done = 0;
-    while let Some(result) = stream.next().await {
-        chunks_done += 1;
-        if chunks_done % args.concurrency == 0 {
-            tracing::info!(
-                "Commit scan progress: {}/{} chunks ({:.1}%), found {} batches so far",
-                chunks_done,
-                chunks_total,
-                (chunks_done as f64 / chunks_total as f64) * 100.0,
-                blockchain_state.current_batch
-            );
-        }
-
-        let scan_results = result?;
-        let mut batch_numbers = scan_results.keys().cloned().collect::<Vec<_>>();
-        batch_numbers.sort_unstable();
-
-        for batch_number in batch_numbers {
-            let batch_info = scan_results.get(&batch_number).unwrap();
-            blockchain_state.apply_batch(batch_number, batch_info);
-        }
+    tracing::info!("Applying {} batches in order...", batch_numbers.len());
+    for batch_number in batch_numbers {
+        let batch_info = all_batches.get(&batch_number).unwrap();
+        blockchain_state.apply_batch(batch_number, batch_info);
     }
 
     tracing::info!(
@@ -285,13 +247,153 @@ async fn run_recover(args: RecoverArgs) -> Result<()> {
     Ok(())
 }
 
+/// Phase 1: Scan all chunks for CommitBatches events, collecting transaction hashes
+async fn scan_commit_events<P: Provider + Clone>(
+    provider: &P,
+    target: Address,
+    from: u64,
+    to: u64,
+    chunk_size: u64,
+    concurrency: usize,
+) -> Result<Vec<(alloy::primitives::B256, alloy::rpc::types::Log)>> {
+    use futures::stream::{self, StreamExt};
+
+    let chunks_total = (to - from) / chunk_size + 1;
+    tracing::info!(
+        "Scanning for CommitBatches events: {} total chunks (concurrency={})",
+        chunks_total,
+        concurrency
+    );
+
+    let chunk_ranges: Vec<_> = (0..chunks_total)
+        .map(|i| {
+            let start = from + (i * chunk_size);
+            let end = (start + chunk_size - 1).min(to);
+            (start, end)
+        })
+        .collect();
+
+    let mut chunk_stream = stream::iter(chunk_ranges)
+        .map(|(start, end)| {
+            let provider = provider.clone();
+            async move {
+                get_commit_batches_from_range(&provider, target, start, end).await
+            }
+        })
+        .buffer_unordered(concurrency);
+
+    let mut chunks_done = 0;
+    let mut all_logs_with_hashes = Vec::new();
+    let mut last_log_time = std::time::Instant::now();
+
+    while let Some(result) = chunk_stream.next().await {
+        chunks_done += 1;
+        all_logs_with_hashes.extend(result?);
+
+        let should_log = chunks_done % concurrency == 0 || last_log_time.elapsed().as_secs() >= 5;
+        if should_log {
+            tracing::info!(
+                "Commit scan progress: {}/{} chunks ({:.1}%), found {} commit events so far",
+                chunks_done,
+                chunks_total,
+                (chunks_done as f64 / chunks_total as f64) * 100.0,
+                all_logs_with_hashes.len()
+            );
+            last_log_time = std::time::Instant::now();
+        }
+    }
+
+    tracing::info!(
+        "Finished scanning all chunks, found {} commit events total",
+        all_logs_with_hashes.len()
+    );
+
+    Ok(all_logs_with_hashes)
+}
+
+/// Phase 2: Fetch all transactions and decode into BatchInfo
+async fn fetch_and_decode_batches<P: Provider + Clone>(
+    provider: &P,
+    logs_with_hashes: Vec<(alloy::primitives::B256, alloy::rpc::types::Log)>,
+    concurrency: usize,
+) -> Result<HashMap<u64, BatchInfo>> {
+    use futures::stream::{self, StreamExt};
+
+    let total = logs_with_hashes.len();
+    tracing::info!(
+        "Fetching {} transactions with concurrency {}...",
+        total,
+        concurrency
+    );
+
+    let fetch_start = std::time::Instant::now();
+    let mut last_log_time = std::time::Instant::now();
+
+    let mut tx_stream = stream::iter(logs_with_hashes)
+        .map(|(tx_hash, lg)| {
+            let provider = provider.clone();
+            async move {
+                let tx_result = provider.get_transaction_by_hash(tx_hash).await;
+                (tx_hash, lg, tx_result)
+            }
+        })
+        .buffer_unordered(concurrency);
+
+    let mut all_batches = HashMap::new();
+    let mut processed = 0;
+
+    while let Some((tx_hash, lg, tx_result)) = tx_stream.next().await {
+        processed += 1;
+
+        if last_log_time.elapsed().as_secs() >= 5 {
+            tracing::info!(
+                "Transaction fetch progress: {}/{} ({:.1}%)",
+                processed,
+                total,
+                (processed as f64 / total as f64) * 100.0
+            );
+            last_log_time = std::time::Instant::now();
+        }
+
+        let tx = match tx_result {
+            Ok(Some(tx)) => tx,
+            Ok(None) => {
+                tracing::warn!("Transaction not found for hash {:?}", tx_hash);
+                continue;
+            }
+            Err(e) => {
+                tracing::error!("Failed to fetch transaction {:?}: {}", tx_hash, e);
+                continue;
+            }
+        };
+
+        let prim_log = alloy::primitives::Log {
+            address: lg.address(),
+            data: lg.data().clone(),
+        };
+
+        if let Ok(ev) = BlockCommit::decode_log(&prim_log) {
+            let batch_info = BatchInfo::parse(ev, tx);
+            all_batches.insert(batch_info.batch_number, batch_info);
+        }
+    }
+
+    tracing::info!(
+        "Finished fetching all transactions in {:.2}s ({:.0} tx/s), collected {} batches total",
+        fetch_start.elapsed().as_secs_f64(),
+        total as f64 / fetch_start.elapsed().as_secs_f64(),
+        all_batches.len()
+    );
+
+    Ok(all_batches)
+}
+
 async fn get_commit_batches_from_range<P: Provider + Clone>(
     provider: &P,
     address: Address,
     from: u64,
     to: u64,
-    tx_batch_size: usize,
-) -> Result<HashMap<u64, BatchInfo>> {
+) -> Result<Vec<(alloy::primitives::B256, alloy::rpc::types::Log)>> {
     // Build a filter: address + topic0 = event signature. Indexed params (batchNumber, batchHash, commitment)
     // can also be filtered later via `topic1/2/3` if needed.
     let filter = Filter::new()
@@ -306,50 +408,13 @@ async fn get_commit_batches_from_range<P: Provider + Clone>(
         .await
         .context("get_logs(BlockCommit)")?;
 
-    let mut results = HashMap::new();
-
-    // Batch transaction fetching: process logs in chunks of tx_batch_size
-    for chunk in logs.chunks(tx_batch_size) {
-        // Collect all tx hashes in this batch
-        let tx_hashes: Vec<B256> = chunk
-            .iter()
-            .filter_map(|lg| lg.transaction_hash)
-            .collect();
-
-        // Fetch all transactions concurrently
-        let tx_futures: Vec<_> = tx_hashes
-            .iter()
-            .map(|&hash| provider.get_transaction_by_hash(hash))
-            .collect();
-
-        let txs = futures::future::join_all(tx_futures).await;
-
-        // Process results
-        for (lg, tx_result) in chunk.iter().zip(txs.iter()) {
-            let tx = match tx_result {
-                Ok(Some(tx)) => tx,
-                Ok(None) => {
-                    tracing::warn!("Transaction not found for log {:?}", lg.transaction_hash);
-                    continue;
-                }
-                Err(e) => {
-                    tracing::error!("Failed to fetch transaction: {}", e);
-                    continue;
-                }
-            };
-
-            // Decode the event (topics+data) using the generated type.
-            // Convert the RPC log into the primitives Log expected by the SolEvent decoder.
-            let prim_log = alloy::primitives::Log {
-                address: lg.address(),
-                data: lg.data().clone(),
-            };
-            if let Ok(ev) = BlockCommit::decode_log(&prim_log) {
-                let batch_info = BatchInfo::parse(ev, tx.clone());
-                results.insert(batch_info.batch_number, batch_info);
-            }
-        }
-    }
+    // Collect logs with their transaction hashes
+    let results: Vec<_> = logs
+        .into_iter()
+        .filter_map(|log| {
+            log.transaction_hash.map(|hash| (hash, log))
+        })
+        .collect();
 
     Ok(results)
 }

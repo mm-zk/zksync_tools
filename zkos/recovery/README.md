@@ -31,11 +31,19 @@ cargo run -- recover \
 
 ### Performance Tuning
 
-**`--tx-batch-size`** (default: 1)
-- Number of transactions to fetch concurrently
+**`--concurrency`** (default: 10)
+- Number of concurrent operations (used for both chunk scanning and transaction fetching)
+- Higher values = faster scanning but more load on the RPC node
+- Recommended values:
+  - Public RPC nodes: 5-10
+  - Self-hosted nodes: 20-50
+  - Powerful self-hosted nodes: 50+
 
-**`--concurrency`** (default: 1)
-- Number of block chunks to scan in parallel
+**`--chunk`** (default: 2000)
+- Number of blocks per RPC request
+- Default works well with most Ethereum clients
+- For Reth with default settings, you can safely use up to 10,000
+- Don't exceed your RPC node's `eth_getLogs` block range limit
 
 **Example with performance tuning:**
 ```shell
@@ -43,8 +51,8 @@ cargo run -- recover \
   --rpc http://localhost:8545 \
   --bridgehub <BRIDGEHUB_ADDRESS> \
   --chain-id <CHAIN_ID> \
-  --tx-batch-size 20 \
-  --concurrency 5 \
+  --concurrency 50 \
+  --chunk 10000 \
   --output recovery.json
 ```
 
