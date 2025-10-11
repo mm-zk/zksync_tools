@@ -49,7 +49,12 @@ impl BatchInfo {
         let (stored, commits) = (decode_params._0, decode_params._1);
 
         // Currently we only support 1 batch per transaction.
-        assert_eq!(1, commits.len());
+        assert_eq!(
+            1,
+            commits.len(),
+            "Multiple batches per transaction not supported: found {} batches",
+            commits.len()
+        );
 
         let blocks_data = parse_da_input(&commits[0].operatorDAInput).unwrap();
 
@@ -109,7 +114,7 @@ impl BlockInfo {
 
         let mut offset = 4;
 
-        let mut logs = Vec::new();
+        let mut logs = Vec::with_capacity(logs_len as usize);
 
         for _ in 0..logs_len {
             let (consumed, log) = Log::new_from_stream(&remaining[offset..]);
@@ -545,7 +550,12 @@ pub fn parse_da_input(input: &[u8]) -> Result<Vec<BlockInfo>> {
 
     let calldata_type = &input[offset];
     tracing::debug!("calldata type: {}", calldata_type);
-    assert_eq!(&0, calldata_type); // we only handle calldata type 0
+    if *calldata_type != 0 {
+        return Err(anyhow::anyhow!(
+            "Unsupported calldata type: {} (only type 0 is supported)",
+            calldata_type
+        ));
+    }
 
     offset += 1;
 
@@ -570,7 +580,12 @@ pub fn parse_da_input(input: &[u8]) -> Result<Vec<BlockInfo>> {
     }
     let blob_commitment = B256::from_slice(&input[offset..offset + 32]);
     tracing::debug!("blob commitment: {:?}", blob_commitment);
-    assert_eq!(blob_commitment, B256::ZERO);
+    if blob_commitment != B256::ZERO {
+        return Err(anyhow::anyhow!(
+            "Expected zero blob commitment, got: {:?}",
+            blob_commitment
+        ));
+    }
 
     Ok(results)
 }

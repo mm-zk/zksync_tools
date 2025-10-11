@@ -26,35 +26,63 @@ pub struct GenesisUpgradeLocalInfo {
     pub force_deploy_info: BTreeMap<Address, BytecodeInfo>,
 }
 
-/// Scan over blocs from 'from' to 'to' (inclusive) looking for GenesisUpgrade event.
+/// Scan over blocks from 'from' to 'to' (inclusive) looking for GenesisUpgrade event.
 pub async fn get_genesis_upgrade<P: Provider + Clone>(
     provider: &P,
     diamond_proxy_address: Address,
     from: u64,
     to: u64,
     chunk: u64,
+    concurrency: usize,
 ) -> Result<GenesisUpgradeLocalInfo> {
-    let mut start = from;
-
     let chunks_total = (to - from) / chunk + 1;
-    tracing::debug!(
-        "Looking for Genesis:  Total chunks to scan: {}",
-        chunks_total
-    );
-    let mut chunks_done = 0;
-    while start <= to {
-        chunks_done += 1;
-        if chunks_done % 10 == 0 {
-            tracing::debug!("Progress: {}/{} chunks done", chunks_done, chunks_total);
-        }
-        let end = (start + chunk - 1).min(to);
 
-        let is_genesis = scan_genesis_upgrade(&provider, diamond_proxy_address, start, end).await?;
-        if let Some(genesis) = is_genesis {
+    tracing::info!(
+        "Looking for GenesisUpgrade event: scanning {} chunks (concurrency={})",
+        chunks_total,
+        concurrency
+    );
+
+    use futures::stream::{self, StreamExt};
+
+    let chunk_ranges: Vec<_> = (0..chunks_total)
+        .map(|i| {
+            let start = from + (i * chunk);
+            let end = (start + chunk - 1).min(to);
+            (start, end)
+        })
+        .collect();
+
+    let mut stream = stream::iter(chunk_ranges)
+        .map(|(start, end)| {
+            let provider = provider.clone();
+            async move {
+                scan_genesis_upgrade(&provider, diamond_proxy_address, start, end).await
+            }
+        })
+        .buffer_unordered(concurrency);
+
+    let mut chunks_processed = 0;
+    while let Some(result) = stream.next().await {
+        chunks_processed += 1;
+        if chunks_processed % 10 == 0 {
+            tracing::info!(
+                "Genesis scan progress: {}/{} chunks ({:.1}%)",
+                chunks_processed,
+                chunks_total,
+                (chunks_processed as f64 / chunks_total as f64) * 100.0
+            );
+        }
+
+        if let Ok(Some(genesis)) = result {
+            tracing::info!(
+                "✓ Found GenesisUpgrade event after scanning {} chunks",
+                chunks_processed
+            );
             return Ok(genesis);
         }
-        start = end.saturating_add(1);
     }
+
     anyhow::bail!("No GenesisUpgrade event found in the specified range")
 }
 

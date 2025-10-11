@@ -7,11 +7,10 @@ use serde::{Deserialize, Serialize};
 use zk_os_basic_system::system_implementation::flat_storage_model::AccountProperties;
 
 use crate::{
-    BatchInfo, BlockInfo,
     chain_genesis::GenesisUpgradeLocalInfo,
     contracts::{CommitBatchInfoZKsyncOS, StoredBatchInfo},
     state_genesis::GenesisState,
-    statediffs::{self, ValueDiff},
+    statediffs::{self, BatchInfo, BlockInfo, ValueDiff},
 };
 /// Struct describing full blockchain state.
 #[derive(Serialize, Deserialize, Debug)]
@@ -155,10 +154,7 @@ impl BlockchainState {
             &self.genesis_tx,
         );
 
-        for i in 0..255 {
-            self.last_256_block_hashes[i] = self.last_256_block_hashes[i + 1];
-        }
-
+        self.last_256_block_hashes.rotate_left(1);
         self.last_256_block_hashes[255] = block_info.block_hash;
         self.current_block += 1;
     }
@@ -314,7 +310,7 @@ impl LocalTree {
         for _ in 0..TREE_DEPTH {
             let next_level_size = current_level.len() / 2 + (current_level.len() % 2);
 
-            let mut next_level = vec![];
+            let mut next_level = Vec::with_capacity(next_level_size);
 
             for i in 0..next_level_size {
                 next_level.push(compress(

@@ -29,12 +29,11 @@ tracing = "0.1"
 tracing-subscriber = { version="0.3", features=["env-filter"]}
 bincode = { version = "2.0.1", features = ["serde"] }
 
-
-
 rocksdb = "0.23.0"
 alloy-rlp = { version = "0.3.12" }
 leb128 = "0.2.5"
-
+semver = "1.0.27"
+futures = "0.3.31"
 
 # Decide long term if needed.
 zk_os_api = { package = "zksync_os_api", git = "https://github.com/matter-labs/zksync-os", tag = "v0.0.25" }

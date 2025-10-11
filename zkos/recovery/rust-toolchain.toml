@@ -1,0 +1,3 @@
+[toolchain]
+channel = "nightly-2025-06-24" # pre #![feature(array_chunks)] removal
+components = ["rustfmt", "clippy"]

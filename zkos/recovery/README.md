@@ -2,77 +2,119 @@
 
 Tool to recover state from just L1, and then to create a new DB for the sequencer to start from.
 
-Recovery tool offers two commands:
-* `recover` to scan L1, and output a json file with all the necessary state information
-* `write-to-db` that creates a new database, from which you can start a sequencer.
+## Commands
 
+### `recover`
+Scans L1 and outputs a JSON file with all necessary state information.
 
+### `write-to-db`
+Creates a new database from the JSON file for starting a sequencer.
 
+## Usage
 
-
-## Recover
-
-```shell
-# Read state from 8545, and save to file.
-# Address has to be diamond proxy address of the given chain.
-cargo run -- recover --rpc http://localhost:8545 --address 0x8FdB49aBc1E2B891D91f64B15aE6A3616c8d8d1e --output some_file.json
-```
-
-## Write to db
+### Basic Recovery
 
 ```shell
- cargo run write-to-db --input some_file.json --db-path DB_PATH
+# Method 1: Auto-discover diamond proxy from Bridgehub
+cargo run -- recover \
+  --rpc http://localhost:8545 \
+  --bridgehub <BRIDGEHUB_ADDRESS> \
+  --chain-id <CHAIN_ID> \
+  --output recovery.json
+
+# Method 2: Direct diamond proxy address
+cargo run -- recover \
+  --rpc http://localhost:8545 \
+  --address <DIAMOND_PROXY_ADDRESS> \
+  --output recovery.json
 ```
 
-Then you can start the sequencer with this database.
+### Performance Tuning
 
-Currently you also have to pass following arguments:
+**`--tx-batch-size`** (default: 1)
+- Number of transactions to fetch concurrently
+
+**`--concurrency`** (default: 1)
+- Number of block chunks to scan in parallel
+
+**Example with performance tuning:**
 ```shell
-general_min_blocks_to_replay=0 general_force_starting_block_number=START_BLOCK general_state_backend=Compacted cargo run
+cargo run -- recover \
+  --rpc http://localhost:8545 \
+  --bridgehub <BRIDGEHUB_ADDRESS> \
+  --chain-id <CHAIN_ID> \
+  --tx-batch-size 20 \
+  --concurrency 5 \
+  --output recovery.json
 ```
 
-The value for START_BLOCK will be printed from the write-to-db command.
-
-
-
-## More info
-Running against local (addresses can change):
-
-
-Getting bridgehub:
-
-```shell
-curl --request POST \                                                                        
-  --url localhost:3050 \
-  --header 'Content-Type: application/json' \
-  --data '{
-      "jsonrpc": "2.0",
-      "id": 1,
-      "method": "zks_getBridgehubContract",
-      "params": []
-    }'
-```
-
-getting executor:
-
-```shell
-cast call 0xec68e2cfe53b183125bcaf2888ae5a94bbcc7a4e 'getZKChain(uint256)(address)' 270
-```
-
-
-
-Actually running the tool:
+### Write to DB
 
 ```shell
-cargo run -- recover --rpc http://localhost:8545 --address 0x8FdB49aBc1E2B891D91f64B15aE6A3616c8d8d1e
+cargo run -- write-to-db \
+  --input recovery.json \
+  --db-path <DB_PATH>
 ```
 
-Checking testnet (specifying to & from blocks):
+The command will output the starting block number for the sequencer:
 
 ```shell
-cargo run -- recover --rpc SEPOLIA_RPC --address 0x02b1ac1cf0a592aefd3c2246b2431388365db272 --from 9210280 --to 9318536
+general_min_blocks_to_replay=0 \
+general_force_starting_block_number=<START_BLOCK> \
+general_state_backend=Compacted \
+cargo run
 ```
 
+## Finding Required Parameters
+
+### Get Bridgehub Address (from L2 RPC when available)
+
+```shell
+curl -X POST <L2_RPC_URL> \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "zks_getBridgehubContract",
+    "params": []
+  }'
+```
+
+### Get Chain ID (from L2 RPC when available)
+
+```shell
+curl -X POST <L2_RPC_URL> \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "jsonrpc": "2.0",
+    "method": "eth_chainId",
+    "params": [],
+    "id": 1
+  }'
+```
+
+### Get Diamond Proxy (from L1 if you have bridgehub + chain ID)
+
+The tool does this automatically with `--bridgehub` and `--chain-id` flags.
+It calls `getZKChain(uint256)` on the bridgehub contract.
+
+## Examples
+
+### Local Development
+```shell
+cargo run -- recover \
+  --rpc http://localhost:8545 \
+  --address <DIAMOND_PROXY_ADDRESS>
+```
+
+### With specific block range
+```shell
+cargo run -- recover \
+  --rpc http://localhost:8545 \
+  --address <DIAMOND_PROXY_ADDRESS> \
+  --from <START_BLOCK> \
+  --to <END_BLOCK>
+```
 
 ## TODO
 
