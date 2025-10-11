@@ -219,13 +219,36 @@ async fn run_recover(args: RecoverArgs) -> Result<()> {
     let mut blockchain_state = BlockchainState::new(genesis.clone(), genesis_local_info);
 
     // Then start scanning for 'CommitBatches' call, and collecting the state.
-    let mut start = from;
     let chunks_total = (to - from) / args.chunk + 1;
-    tracing::info!("Scanning for CommitBatches events: {} total chunks", chunks_total);
+    tracing::info!(
+        "Scanning for CommitBatches events: {} total chunks (concurrency={})",
+        chunks_total,
+        args.concurrency
+    );
+
+    use futures::stream::{self, StreamExt};
+
+    let chunk_ranges: Vec<_> = (0..chunks_total)
+        .map(|i| {
+            let start = from + (i * args.chunk);
+            let end = (start + args.chunk - 1).min(to);
+            (start, end)
+        })
+        .collect();
+
+    let mut stream = stream::iter(chunk_ranges)
+        .map(|(start, end)| {
+            let provider = provider.clone();
+            async move {
+                get_commit_batches_from_range(&provider, target, start, end, args.tx_batch_size).await
+            }
+        })
+        .buffer_unordered(args.concurrency);
+
     let mut chunks_done = 0;
-    while start <= to {
+    while let Some(result) = stream.next().await {
         chunks_done += 1;
-        if chunks_done % 10 == 0 {
+        if chunks_done % args.concurrency == 0 {
             tracing::info!(
                 "Commit scan progress: {}/{} chunks ({:.1}%), found {} batches so far",
                 chunks_done,
@@ -234,9 +257,8 @@ async fn run_recover(args: RecoverArgs) -> Result<()> {
                 blockchain_state.current_batch
             );
         }
-        let end = (start + args.chunk - 1).min(to);
-        let scan_results = get_commit_batches_from_range(&provider, target, start, end, args.tx_batch_size).await?;
 
+        let scan_results = result?;
         let mut batch_numbers = scan_results.keys().cloned().collect::<Vec<_>>();
         batch_numbers.sort_unstable();
 
@@ -244,8 +266,6 @@ async fn run_recover(args: RecoverArgs) -> Result<()> {
             let batch_info = scan_results.get(&batch_number).unwrap();
             blockchain_state.apply_batch(batch_number, batch_info);
         }
-
-        start = end.saturating_add(1);
     }
 
     tracing::info!(

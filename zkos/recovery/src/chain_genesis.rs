@@ -65,7 +65,7 @@ pub async fn get_genesis_upgrade<P: Provider + Clone>(
     let mut chunks_processed = 0;
     while let Some(result) = stream.next().await {
         chunks_processed += 1;
-        if chunks_processed % 10 == 0 {
+        if chunks_processed % concurrency == 0 {
             tracing::info!(
                 "Genesis scan progress: {}/{} chunks ({:.1}%)",
                 chunks_processed,
