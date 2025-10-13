@@ -74,7 +74,7 @@ pub async fn get_genesis_upgrade<P: Provider + Clone>(
 
         if let Ok(Some(genesis)) = result {
             tracing::info!(
-                "✓ Found GenesisUpgrade event after scanning {} chunks",
+                "Found GenesisUpgrade event after scanning {} chunks",
                 chunks_processed
             );
             return Ok(genesis);
