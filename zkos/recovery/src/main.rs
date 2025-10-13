@@ -86,7 +86,7 @@ pub struct RecoverArgs {
     #[arg(long, default_value_t = 2_000u64)]
     chunk: u64,
 
-    /// Concurrency (number of chunks to scan in parallel).
+    /// Concurrency (number of concurrent operations for both chunk scanning and transaction fetching).
     #[arg(long, default_value_t = 10)]
     concurrency: usize,
 
