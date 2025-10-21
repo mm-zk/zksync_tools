@@ -180,7 +180,7 @@ deploy_l1_contracts() {
 
 
     # Init ecosystem -- with zksync-os by default.
-    if ../../$zkstack_tool ecosystem init --deploy-paymaster=false --deploy-erc20=false --observability=false \
+    if ../../$zkstack_tool ecosystem init --deploy-paymaster=false --deploy-erc20=false --observability=false --no-port-reallocation \
     --deploy-ecosystem --l1-rpc-url=http://localhost:8545 --zksync-os 2>&1 | tee "$log"; then
         rc=0
     else
@@ -346,12 +346,15 @@ zkstack_tool=repos/zksync-era-for-stack/zkstack_cli/target/release/zkstack
 printf "Initializing ecosystem...\n"
 
 pushd "ecosystem" >/dev/null
-../$zkstack_tool ecosystem create --ecosystem-name local-v1 --l1-network localhost --chain-name era1 --chain-id 270 --prover-mode no-proofs --wallet-creation random --link-to-code ../../repos/zksync-era-for-stack --l1-batch-commit-data-generator-mode rollup --start-containers false   --base-token-address 0x0000000000000000000000000000000000000001 --base-token-price-nominator 1 --base-token-price-denominator 1 --evm-emulator false --zksync-os
+../$zkstack_tool ecosystem create --ecosystem-name local-v1 --l1-network localhost --chain-name era --chain-id 271 --prover-mode no-proofs --wallet-creation random --link-to-code ../../repos/zksync-era-for-stack --l1-batch-commit-data-generator-mode rollup --start-containers false   --base-token-address 0x0000000000000000000000000000000000000001 --base-token-price-nominator 1 --base-token-price-denominator 1 --evm-emulator false
 pushd "local_v1"
+# By default we are creating era based chain, so we need to set zksync-os contracts and then create zksync-os based chain.
 ../../$zkstack_tool ctm set-ctm-contracts --contracts-src-path ../../repos/era-contracts/ --default-configs-src-path ../../repos/zksync-os-server/genesis --zksync-os
+../../$zkstack_tool chain create --chain-name era1 --chain-id 270 --prover-mode no-proofs --wallet-creation random --l1-batch-commit-data-generator-mode rollup  --base-token-address 0x0000000000000000000000000000000000000001 --base-token-price-nominator 1 --base-token-price-denominator 1 --evm-emulator false --set-as-default=true --zksync-os 
+# Remove existing era chain, which is era based chain, not zksync-os based.
+rm -rf chains/era
 popd >/dev/null
 popd >/dev/null
-
 
 logfile=repos/process.log
 
