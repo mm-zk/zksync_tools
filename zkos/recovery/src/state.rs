@@ -24,6 +24,7 @@ pub struct BlockchainState {
     pub last_256_block_hashes: Vec<B256>,
 
     pub batches_metadata: Vec<BatchMetadata>,
+    pub priority_tx_map: BTreeMap<u64, B256>,
 }
 
 impl BlockchainState {
@@ -44,6 +45,7 @@ impl BlockchainState {
             current_block: 0,
             last_256_block_hashes,
             batches_metadata: vec![],
+            priority_tx_map: BTreeMap::new(),
         }
     }
 

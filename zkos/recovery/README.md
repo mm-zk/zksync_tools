@@ -131,4 +131,4 @@ cargo run -- recover \
 
 ## TODO
 
-* L1 deposit transactions not testnet
+* try out with real proofs.
