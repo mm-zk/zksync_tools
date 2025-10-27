@@ -273,13 +273,13 @@ update_operator_keys() {
 
 create_genesis_file() {
     # complex upgrader 0x000000000000000000000000000000000000800f
-    l2_complex_upgrader=$(yq -r ".deployedBytecode.object" repos/zksync-era/contracts/l1-contracts/out/L2ComplexUpgrader.sol/L2ComplexUpgrader.json)
+    l2_complex_upgrader=$(yq -r ".deployedBytecode.object" repos/era-contracts/l1-contracts/out/L2ComplexUpgrader.sol/L2ComplexUpgrader.json)
 
     # l2 genesis upgrade 0x0000000000000000000000000000000000010001
-    l2_genesis_upgrade=$(yq -r ".deployedBytecode.object" repos/zksync-era/contracts/l1-contracts/out/L2GenesisUpgrade.sol/L2GenesisUpgrade.json)
+    l2_genesis_upgrade=$(yq -r ".deployedBytecode.object" repos/era-contracts/l1-contracts/out/L2GenesisUpgrade.sol/L2GenesisUpgrade.json)
 
     # l2 wrapped base token (0x0000000000000000000000000000000000010007)
-    l2_wrapped_base_token=$(yq -r ".deployedBytecode.object" repos/zksync-era/contracts/l1-contracts/out/L2WrappedBaseToken.sol/L2WrappedBaseToken.json)
+    l2_wrapped_base_token=$(yq -r ".deployedBytecode.object" repos/era-contracts/l1-contracts/out/L2WrappedBaseToken.sol/L2WrappedBaseToken.json)
 cat > genesis.json <<EOF
 {
   "initial_contracts": [
