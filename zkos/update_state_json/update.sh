@@ -282,7 +282,11 @@ update_operator_keys() {
 
 create_genesis_file() {
     local genesis_file="$PWD/genesis.json"
-    pushd "repos/era-contracts/zksync-os-genesis-gen" > /dev/null
+    pushd "repos/era-contracts/l1-contracts" > /dev/null
+    yarn build:foundry
+    popd > /dev/null
+
+    pushd "repos/era-contracts/tools/zksync-os-genesis-gen" > /dev/null
     cargo run -- --output-file "$genesis_file"
     popd > /dev/null
 }
@@ -347,6 +351,10 @@ fi
 update_submodules_if_requested || { popd >/dev/null; return 1; }
 popd > /dev/null
 
+
+printf "*** Creating Genesis File\n"
+
+create_genesis_file
 
 printf "*** Building zkstack cli ***\n"
 
@@ -440,10 +448,6 @@ cargo run -- --bridgehub "$bridgehub_address"
 popd > /dev/null
 
 
-printf "creating genesis file\n"
-
-# Now let's generate genesis.json file
-create_genesis_file
 
 
 printf "Stopping anvil\n"
