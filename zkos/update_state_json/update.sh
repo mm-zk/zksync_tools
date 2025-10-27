@@ -1,7 +1,4 @@
-
 #!/usr/bin/env bash
-
-
 
 set -euo pipefail
 
@@ -54,7 +51,7 @@ if git rev-parse -q --verify "$tag^{commit}" >/dev/null; then
     return $?
 fi
 
-# printf "ERROR: Tag or commit '$tag' not found in repo $(pwd)\n"; return 1
+printf "ERROR: Tag or commit '$tag' not found in repo $(pwd)\n"; return 1
 }
 
 
