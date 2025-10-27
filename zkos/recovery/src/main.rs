@@ -12,8 +12,11 @@ use tracing::level_filters::LevelFilter;
 use tracing_subscriber::EnvFilter;
 
 use crate::{
-    chain_genesis::get_genesis_upgrade, contracts::BlockCommit, state::BlockchainState,
-    state_genesis::init_genesis, statediffs::BatchInfo,
+    chain_genesis::get_genesis_upgrade,
+    contracts::{BlockCommit, NewPriorityRequest},
+    state::BlockchainState,
+    state_genesis::init_genesis,
+    statediffs::BatchInfo,
 };
 
 pub mod bytecodes;
@@ -217,12 +220,47 @@ async fn run_recover(args: RecoverArgs) -> Result<()> {
     let mut blockchain_state = BlockchainState::new(genesis.clone(), genesis_local_info);
 
     // Phase 1: Scan for CommitBatches events
-    let all_logs_with_hashes =
-        scan_commit_events(&provider, target, from, to, args.chunk, args.concurrency).await?;
+    let all_logs_with_hashes = scan_events(
+        &provider,
+        target,
+        from,
+        to,
+        args.chunk,
+        args.concurrency,
+        BlockCommit::SIGNATURE_HASH,
+    )
+    .await?;
 
     // Phase 2: Fetch transactions and decode batches
     let all_batches =
         fetch_and_decode_batches(&provider, all_logs_with_hashes, args.concurrency).await?;
+
+    let all_priority_tx = scan_events(
+        &provider,
+        target,
+        from,
+        to,
+        args.chunk,
+        args.concurrency,
+        NewPriorityRequest::SIGNATURE_HASH,
+    )
+    .await?;
+
+    // Create a map from tx id to hash.
+    blockchain_state.priority_tx_map = all_priority_tx
+        .iter()
+        .filter_map(|(_, log)| {
+            let prim_log = alloy::primitives::Log {
+                address: log.address(),
+                data: log.data().clone(),
+            };
+            if let Ok(ev) = NewPriorityRequest::decode_log(&prim_log) {
+                Some((ev.data.txId.try_into().unwrap(), ev.data.txHash))
+            } else {
+                None
+            }
+        })
+        .collect();
 
     // Apply batches in order after all chunks are collected
     let mut batch_numbers = all_batches.keys().cloned().collect::<Vec<_>>();
@@ -252,13 +290,14 @@ async fn run_recover(args: RecoverArgs) -> Result<()> {
 }
 
 /// Phase 1: Scan all chunks for CommitBatches events, collecting transaction hashes
-async fn scan_commit_events<P: Provider + Clone>(
+async fn scan_events<P: Provider + Clone>(
     provider: &P,
     target: Address,
     from: u64,
     to: u64,
     chunk_size: u64,
     concurrency: usize,
+    event_signature: alloy::primitives::B256,
 ) -> Result<Vec<(alloy::primitives::B256, alloy::rpc::types::Log)>> {
     use futures::stream::{self, StreamExt};
 
@@ -280,7 +319,7 @@ async fn scan_commit_events<P: Provider + Clone>(
     let mut chunk_stream = stream::iter(chunk_ranges)
         .map(|(start, end)| {
             let provider = provider.clone();
-            async move { get_commit_batches_from_range(&provider, target, start, end).await }
+            async move { get_event_from_range(&provider, target, start, end, event_signature).await }
         })
         .buffer_unordered(concurrency);
 
@@ -390,25 +429,23 @@ async fn fetch_and_decode_batches<P: Provider + Clone>(
     Ok(all_batches)
 }
 
-async fn get_commit_batches_from_range<P: Provider + Clone>(
+async fn get_event_from_range<P: Provider + Clone>(
     provider: &P,
     address: Address,
     from: u64,
     to: u64,
+    event_signature: alloy::primitives::B256,
 ) -> Result<Vec<(alloy::primitives::B256, alloy::rpc::types::Log)>> {
     // Build a filter: address + topic0 = event signature. Indexed params (batchNumber, batchHash, commitment)
     // can also be filtered later via `topic1/2/3` if needed.
     let filter = Filter::new()
         .address(address)
-        .event_signature(BlockCommit::SIGNATURE_HASH)
+        .event_signature(event_signature)
         .from_block(from)
         .to_block(to);
 
     // Fetch all matching logs.
-    let logs = provider
-        .get_logs(&filter)
-        .await
-        .context("get_logs(BlockCommit)")?;
+    let logs = provider.get_logs(&filter).await.context("get_logs()")?;
 
     // Collect logs with their transaction hashes
     let results: Vec<_> = logs

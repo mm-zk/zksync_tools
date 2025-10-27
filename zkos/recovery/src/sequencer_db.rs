@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use alloy::primitives::{Address, U256};
+use alloy::primitives::{Address, U256, keccak256};
 use alloy::rlp::Encodable;
 use alloy::{consensus::Block, primitives::B256};
 use anyhow::{Context, Result};
@@ -153,18 +153,35 @@ pub fn write_to_db(
         &blockchain_state.current_block.to_be_bytes(),
     )?;
 
+    // Starting id is the sum of all the number_of_layer1_txs from all batches.
+    let starting_l1_priority_id: u64 = blockchain_state
+        .batches_metadata
+        .iter()
+        .map(|batch| batch.commit_batch_info.number_of_layer1_txs)
+        .sum();
+
+    println!(
+        "Setting starting_l1_priority_id to {}",
+        starting_l1_priority_id
+    );
+
+    let tx_hashes = (0..starting_l1_priority_id)
+        .map(|id| blockchain_state.priority_tx_map.get(&id).cloned().unwrap())
+        .collect::<Vec<_>>();
+
+    let (_, cache) = tx_hashes_into_merkle_root_and_cache(&tx_hashes);
+
     let destination = &mut [0u8; 1000];
 
     let result = bincode::encode_into_slice(
         &CachedTreeData {
-            start_index: 0,
-            cache: vec![None; 32],
+            start_index: starting_l1_priority_id as usize,
+            cache,
         },
         &mut destination[..],
         bincode::config::standard(),
     )?;
 
-    // TODO: put some real data here.
     priority_txs_db.put_cf(priority_txs_cf, b"data", &destination[..result])?;
 
     state_db
@@ -232,9 +249,6 @@ pub fn write_to_db(
 
     wal_db.put_cf(node_version_cf, current_block_key, &node_version_value)?;
     let last_processed_l1_tx_id_cf = wal_db.cf_handle("last_processed_l1_tx_id").unwrap();
-
-    // TODO: fixme.
-    let starting_l1_priority_id = 1000u64;
 
     let starting_l1_tx_id_value =
         bincode::serde::encode_to_vec(starting_l1_priority_id, bincode::config::standard())
@@ -737,4 +751,40 @@ impl<'de> serde::Deserialize<'de> for BlockHashes {
             .map_err(|_| serde::de::Error::custom("Expected array of length 256"))?;
         Ok(Self(array))
     }
+}
+
+pub fn tx_hashes_into_merkle_root_and_cache(tx_hashes: &[B256]) -> (B256, Vec<Option<B256>>) {
+    let tree_size = (tx_hashes.len() + 1).next_power_of_two();
+    // copy tx_hashes into a vec of size tree_size, padding with zeros
+    let mut padded_tx_hashes = vec![keccak256(&[]); tree_size];
+    padded_tx_hashes[..tx_hashes.len()].copy_from_slice(tx_hashes);
+
+    let mut curr_index = tx_hashes.len();
+
+    let mut cache = Vec::new();
+
+    while padded_tx_hashes.len() > 1 {
+        if curr_index % 2 == 0 {
+            // left sibling
+            cache.push(None);
+        } else {
+            // right sibling
+            cache.push(Some(padded_tx_hashes[curr_index - 1]));
+        }
+        curr_index /= 2;
+
+        let mut new_level = vec![];
+        for i in (0..padded_tx_hashes.len()).step_by(2) {
+            let left = padded_tx_hashes[i];
+            let right = padded_tx_hashes[i + 1];
+            let mut bytes = [0_u8; 64];
+            bytes[..32].copy_from_slice(&left.0);
+            bytes[32..].copy_from_slice(&right.0);
+            let parent_hash = keccak256(bytes);
+            new_level.push(parent_hash);
+        }
+        padded_tx_hashes = new_level;
+    }
+
+    (padded_tx_hashes[0], cache)
 }
