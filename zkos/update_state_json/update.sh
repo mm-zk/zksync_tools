@@ -4,15 +4,15 @@ set -euo pipefail
 
 
 # Default: push is enabled unless --no-push is provided
-PUSH_CHANGES=true
+PUSH_CHANGES=false
 # Default: use SSH links
 REPO_PROTO="git@github.com:"
 
 # Parse CLI arguments
 for arg in "$@"; do
   case $arg in
-    --no-push)
-      PUSH_CHANGES=false
+    --push)
+      PUSH_CHANGES=true
       ;;
     --http)
       REPO_PROTO="https://github.com/"
