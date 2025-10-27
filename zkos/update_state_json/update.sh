@@ -1,10 +1,27 @@
+
 #!/usr/bin/env bash
+
 
 
 set -euo pipefail
 
+
+# Default: push is enabled unless --no-push is provided
+PUSH_CHANGES=true
 # Default: use SSH links
 REPO_PROTO="git@github.com:"
+
+# Parse CLI arguments
+for arg in "$@"; do
+  case $arg in
+    --no-push)
+      PUSH_CHANGES=false
+      ;;
+    --http)
+      REPO_PROTO="https://github.com/"
+      ;;
+  esac
+done
 
 WITH_SUBMODULES=true
 RPC_URL=http://localhost:8545
@@ -465,12 +482,16 @@ if [ "${COMMIT_CHANGES:-}" = "true" ]; then
 
 
   pushd "repos/zksync-os-server" >/dev/null
-  
-  # if there is any git diff - create a new branch and push.
+
+  # if there is any git diff - create a new branch and push, unless --no-push is set
   if ! git diff --quiet; then
-    git checkout -b "update-state-from-script-$(date +%Y%m%d%H%M%S)"
-    git commit -a -m "Update state - contracts: $ERA_CONTRACTS_TAG, zkstack tool: $ZKSYNC_ERA_STACK_CLI_TAG"
-    git push origin HEAD
+    if $PUSH_CHANGES; then
+      git checkout -b "update-state-from-script-$(date +%Y%m%d%H%M%S)"
+      git commit -a -m "Update state - contracts: $ERA_CONTRACTS_TAG, zkstack tool: $ZKSYNC_ERA_STACK_CLI_TAG"
+      git push origin HEAD
+    else
+      echo "--no-push specified: changes detected but not committed or pushed."
+    fi
   fi
 
   popd >/dev/null
