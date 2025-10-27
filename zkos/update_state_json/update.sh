@@ -1,10 +1,13 @@
 #!/usr/bin/env bash
 
+
 set -euo pipefail
 
+# Default: use SSH links
+REPO_PROTO="git@github.com:"
 
 WITH_SUBMODULES=true
-
+RPC_URL=http://localhost:8545
 
 verify_clean_worktree() {
 # Fail if there are unstaged or staged changes
@@ -34,7 +37,7 @@ if git rev-parse -q --verify "$tag^{commit}" >/dev/null; then
     return $?
 fi
 
-printf "ERROR: Tag or commit '$tag' not found in repo $(pwd)\n"; return 1
+# printf "ERROR: Tag or commit '$tag' not found in repo $(pwd)\n"; return 1
 }
 
 
@@ -143,7 +146,6 @@ build_zkstack() {
 
 fund_accounts() {
     pushd "ecosystem" >/dev/null
-    RPC_URL=http://localhost:8545
     PRIVKEY=0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80
     find . -type f -name 'wallets.yaml' | while read -r file; do
     echo "Processing $file …"
@@ -202,29 +204,22 @@ maybe_dec_to_hex() {
     fi
 }
 
-register_verifier_at() {
-    local exec_version="$1"
-    verifier_dec=$(yq ".l1.verifier_addr" ecosystem/local_v1/chains/era1/configs/contracts.yaml)
-    verifier_hex=$(maybe_dec_to_hex "$verifier_dec")
-
-    plonk_address=$(cast call --rpc-url http://localhost:8545 $verifier_hex 'plonkVerifiers(uint32)(address)' 0)
-    fflonk_address=$(cast call --rpc-url http://localhost:8545 $verifier_hex 'fflonkVerifiers(uint32)(address)' 0)
-
-    ctm_owner_pk=$(yq ".governor.private_key" ecosystem/local_v1/configs/wallets.yaml)
-
-    cast send --rpc-url http://localhost:8545 $verifier_hex 'addVerifier(uint32,address,address)' $exec_version $fflonk_address $plonk_address --private-key $ctm_owner_pk
-}
-
-
 update_bridgehub_address() {
-    NEW_ADDR=$bridgehub_address perl -0777 -i -pe '
-    my $new = $ENV{"NEW_ADDR"};
+  local new_addr="$bridgehub_address"
+
+  NEW_ADDR="$new_addr" perl -0777 -i -pe '
+    my $new = $ENV{"NEW_ADDR"} // die "NEW_ADDR not set\n";
     s{
-        (\#\s*\[config\([^\)]*default_t\s*=\s*")   # everything up to opening quote
-        0x[0-9a-fA-F]{40}                          # old address
-        ("\.parse\(\)\.unwrap\(\)\)\])             # rest of the attribute
-    }{$1$new$2}xg
-    ' "repos/zksync-os-server/node/bin/src/config.rs"
+      (?x)
+      ( \#\s*\[config\(
+          [^\)]*?\bwith\s*=\s*Optional\(\s*Serde!\[\s*int\s*\]\s*\)\s*,\s*
+          [^\)]*?\bdefault_t\s*=\s*Some\(\s*")  # up to opening quote
+      0x[0-9a-fA-F]{40}                          # old address
+      ( "\s*\.parse\(\)\s*\.unwrap\(\)\s*\)\s*\)\s*\] )  # ...unwrap()))]
+      (?= \s* (?:\/\/[^\n]*\n|\s)*               # allow comments/whitespace
+          pub \s+ bridgehub_address \s* : \s* Option<Address> \s* , )
+    }{$1$new$2}sgx;
+  ' "repos/zksync-os-server/node/bin/src/config.rs"
 }
 
 update_operator_keys() {
@@ -272,33 +267,10 @@ update_operator_keys() {
 
 
 create_genesis_file() {
-    # complex upgrader 0x000000000000000000000000000000000000800f
-    l2_complex_upgrader=$(yq -r ".deployedBytecode.object" repos/zksync-era/contracts/l1-contracts/out/L2ComplexUpgrader.sol/L2ComplexUpgrader.json)
-
-    # l2 genesis upgrade 0x0000000000000000000000000000000000010001
-    l2_genesis_upgrade=$(yq -r ".deployedBytecode.object" repos/zksync-era/contracts/l1-contracts/out/L2GenesisUpgrade.sol/L2GenesisUpgrade.json)
-
-    # l2 wrapped base token (0x0000000000000000000000000000000000010007)
-    l2_wrapped_base_token=$(yq -r ".deployedBytecode.object" repos/zksync-era/contracts/l1-contracts/out/L2WrappedBaseToken.sol/L2WrappedBaseToken.json)
-cat > genesis.json <<EOF
-{
-  "initial_contracts": [
-    [
-      "0x000000000000000000000000000000000000800f",
-      "$l2_complex_upgrader"
-    ],
-    [
-      "0x0000000000000000000000000000000000010001",
-      "$l2_genesis_upgrade"
-    ],
-    [
-      "0x0000000000000000000000000000000000010007",
-      "$l2_wrapped_base_token"
-    ]
-  ],
-  "additional_storage": []
-}
-EOF
+    local genesis_file="$PWD/genesis.json"
+    pushd "repos/era-contracts/zksync-os-genesis-gen" > /dev/null
+    cargo run -- --output-file "$genesis_file"
+    popd > /dev/null
 }
 
 # If ZKSYNC_ERA_STACK_CLI_TAG is unset or empty, default to origin/main
@@ -320,19 +292,44 @@ if [[ -z "$ZKSYNC_OS_SERVER_TAG" || -z "$ERA_CONTRACTS_TAG" || -z "$ZKSYNC_ERA_S
   exit 1
 fi
 
-
 printf "*** Fetching repositories ***\n"
 
-clone_and_tag git@github.com:matter-labs/zksync-os-server.git "repos/zksync-os-server" $ZKSYNC_OS_SERVER_TAG
-# zksync-era - checked out at the version for zkstack.
-clone_and_tag git@github.com:matter-labs/zksync-era.git "repos/zksync-era-for-stack" $ZKSYNC_ERA_STACK_CLI_TAG
+# Handle local param for each repo
+if [[ "$ZKSYNC_OS_SERVER_TAG" == "local" ]]; then
+  if [[ ! -d "repos/zksync-os-server/.git" ]]; then
+    printf "ERROR: repos/zksync-os-server not present for local mode\n"
+    exit 1
+  fi
+  printf "Using local repos/zksync-os-server\n"
+else
+  clone_and_tag "${REPO_PROTO}matter-labs/zksync-os-server.git" "repos/zksync-os-server" "$ZKSYNC_OS_SERVER_TAG"
+fi
 
-# era-contracts - with the latest contracts.
-clone_and_tag git@github.com:matter-labs/era-contracts.git "repos/era-contracts" $ERA_CONTRACTS_TAG
+if [[ "$ZKSYNC_ERA_STACK_CLI_TAG" == "local" ]]; then
+  if [[ ! -d "repos/zksync-era-for-stack/.git" ]]; then
+    printf "ERROR: repos/zksync-era-for-stack not present for local mode\n"
+    exit 1
+  fi
+  printf "Using local repos/zksync-era-for-stack\n"
+else
+  clone_and_tag "${REPO_PROTO}matter-labs/zksync-era.git" "repos/zksync-era-for-stack" "$ZKSYNC_ERA_STACK_CLI_TAG"
+fi
+
+if [[ "$ERA_CONTRACTS_TAG" == "local" ]]; then
+  if [[ ! -d "repos/era-contracts/.git" ]]; then
+    printf "ERROR: repos/era-contracts not present for local mode\n"
+    exit 1
+  fi
+  printf "Using local repos/era-contracts\n"
+else
+  clone_and_tag "${REPO_PROTO}matter-labs/era-contracts.git" "repos/era-contracts" "$ERA_CONTRACTS_TAG"
+fi
 
 pushd "repos/era-contracts" > /dev/null
 printf "*** Preparing contracts  ***\n"
-verify_clean_worktree || { popd >/dev/null; return 1; }
+if [[ "$ERA_CONTRACTS_TAG" != "local" ]]; then
+  verify_clean_worktree || { popd >/dev/null; return 1; }
+fi
 update_submodules_if_requested || { popd >/dev/null; return 1; }
 popd > /dev/null
 
@@ -402,7 +399,6 @@ if [[ -z "${ZKSYNC_OS_EXECUTION_VERSION:-}" ]]; then
   ZKSYNC_OS_EXECUTION_VERSION=2
   printf "ZKSYNC_OS_EXECUTION_VERSION not set, defaulting to %s\n" "ZKSYNC_OS_EXECUTION_VERSION"
 fi
-register_verifier_at $ZKSYNC_OS_EXECUTION_VERSION
 
 bridgehub_address=$(grep 'bridgehub_proxy_addr:' ecosystem/local_v1/chains/era1/configs/contracts.yaml | awk '{print $2}')
 
@@ -414,7 +410,7 @@ get_wallet_pk() {
 }
 
 
-operator_pk=$(get_wallet_pk "operator")
+commit_operator_pk=$(get_wallet_pk "blob_operator")
 prove_operator_pk=$(get_wallet_pk "prove_operator")
 execute_operator_pk=$(get_wallet_pk "execute_operator")
 
@@ -456,7 +452,7 @@ if [ "${COMMIT_CHANGES:-}" = "true" ]; then
     printf "updating bridgehub address & operators keys in rust file...\n"
 
     update_bridgehub_address
-    update_operator_keys $operator_pk $prove_operator_pk $execute_operator_pk
+    update_operator_keys $commit_operator_pk $prove_operator_pk $execute_operator_pk
 
 
     printf "Copying genesis.json and zkos-l1-state.json to zksync-os-server...\n"
