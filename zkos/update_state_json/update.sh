@@ -281,8 +281,12 @@ update_operator_keys() {
 
 
 create_genesis_file() {
+    pushd "repos/era-contracts/l1-contracts" > /dev/null
+    yarn build:foundry
+    popd > /dev/null
+
     local genesis_file="$PWD/genesis.json"
-    pushd "repos/era-contracts/zksync-os-genesis-gen" > /dev/null
+    pushd "repos/era-contracts/tools/zksync-os-genesis-gen" > /dev/null
     cargo run -- --output-file "$genesis_file"
     popd > /dev/null
 }
@@ -347,6 +351,22 @@ fi
 update_submodules_if_requested || { popd >/dev/null; return 1; }
 popd > /dev/null
 
+printf "creating genesis file\n"
+
+# Now let's generate genesis.json file
+create_genesis_file
+
+# if commit changes = false, we require that the L2 genesis.json matches the existing one.
+# Otherwise, the generated L1 state wont be aligned with the new L2 genesis.
+if [ "${COMMIT_CHANGES:-}" = "false" ]; then
+  if ! diff -q genesis.json repos/zksync-os-server/genesis/genesis.json >/dev/null 2>&1; then
+    printf "ERROR: There is a difference between the generated genesis.json and the existing one in repos/zksync-os-server/genesis/genesis.json.\n"
+    printf "To produce the correct output, please re-run the script with COMMIT_CHANGES=true.\n"
+    exit 1
+  fi
+fi
+
+cp genesis.json repos/zksync-os-server/genesis/genesis.json
 
 printf "*** Building zkstack cli ***\n"
 
@@ -440,10 +460,6 @@ cargo run -- --bridgehub "$bridgehub_address"
 popd > /dev/null
 
 
-printf "creating genesis file\n"
-
-# Now let's generate genesis.json file
-create_genesis_file
 
 
 printf "Stopping anvil\n"
@@ -472,11 +488,7 @@ if [ "${COMMIT_CHANGES:-}" = "true" ]; then
     printf "Copying genesis.json and zkos-l1-state.json to zksync-os-server...\n"
 
 
-    cp genesis.json repos/zksync-os-server/genesis/genesis.json
     cp zkos-l1-state.json repos/zksync-os-server/zkos-l1-state.json
-
-
-
 
   pushd "repos/zksync-os-server" >/dev/null
 

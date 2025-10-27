@@ -41,13 +41,3 @@ You can also ask the tool to prepare the zksync-os-server PR for you:
 ```
 COMMIT_CHANGES=true ERA_CONTRACTS_TAG=zkos-v0.29.7  ./update.sh
 ```
-
-## Updating contracts locally
-
-Note, that when updating contracts, the genesis root will be updated too. However, this update needs to be reflected inside the contracts before those are deployed. Thus, when updating contracts locally, you should run the command twice:
-- First time, it will update genesis.json
-- The second time, it will reflect it in contracts
-
-```
-COMMIT_CHANGES=true ZKSYNC_ERA_STACK_CLI_TAG=local  ERA_CONTRACTS_TAG=local ZKSYNC_OS_SERVER_TAG=local ./update.sh --http --no-push && ZKSYNC_ERA_STACK_CLI_TAG=local  ERA_CONTRACTS_TAG=local ZKSYNC_OS_SERVER_TAG=local ./update.sh --http --no-push
-```
