@@ -39,5 +39,13 @@ general_zkstack_cli_config_dir=../../ecosystem/local_v1/chains/era1 cargo run
 You can also ask the tool to prepare the zksync-os-server PR for you:
 
 ```
-COMMIT_CHANGES=true ERA_CONTRACTS_TAG=zkos-v0.29.7  ./update.sh
+COMMIT_CHANGES=true ERA_CONTRACTS_TAG=zkos-v0.29.7  ./update.sh --push
+```
+
+## Working locally
+
+To use the repo locally, use the `local` tag for the repos.
+
+```
+COMMIT_CHANGES=true ZKSYNC_ERA_STACK_CLI_TAG=local ERA_CONTRACTS_TAG=local ZKSYNC_OS_SERVER_TAG=local ./update.sh --http
 ```
