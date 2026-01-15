@@ -1,0 +1,9 @@
+[package]
+name = "blob_decoder"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+hex = "0.4"
+clap = { version = "4.4", features = ["derive"] }
+zkevm_circuits = { version = "0.153.4" }
